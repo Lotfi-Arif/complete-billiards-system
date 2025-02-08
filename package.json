@@ -1,0 +1,9 @@
+{
+  "name": "complete-pool-table",
+  "version": "1.0.0",
+  "description": "A system that is designed for a userbase in Libya, for managing pool tables",
+  "main": "index.js",
+  "repository": "https://github.com/Lotfi-Arif/complete-billiards-system",
+  "author": "Lotfi-Arif",
+  "license": "MIT"
+}
