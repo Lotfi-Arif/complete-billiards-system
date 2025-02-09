@@ -1,0 +1,29 @@
+export class ApplicationError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public details: Record<string, unknown> = {}
+  ) {
+    super(message);
+    this.name = this.constructor.name;
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+export class DatabaseError extends ApplicationError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "DB_ERROR", details);
+  }
+}
+
+export class ArduinoError extends ApplicationError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "ARDUINO_ERROR", details);
+  }
+}
+
+export class ValidationError extends ApplicationError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "VALIDATION_ERROR", details);
+  }
+}
