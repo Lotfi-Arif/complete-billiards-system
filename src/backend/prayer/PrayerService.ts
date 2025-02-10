@@ -29,21 +29,27 @@ export class PrayerService {
 
   private updatePrayerTimes(): void {
     const date = new Date();
+    // Use timeZone in date calculation
+    const localDate = new Date(
+      date.toLocaleString("en-US", { timeZone: this.timeZone })
+    );
     this.prayerTimes = new PrayerTimes(
       this.coordinates,
-      date,
-      CalculationMethod.UmmAlQura() // Using UmmAlQura calculation method
+      localDate,
+      CalculationMethod.UmmAlQura()
     );
   }
 
   private startDailyUpdate(): void {
-    // Update prayer times at midnight each day
     this.updateInterval = setInterval(() => {
       const now = new Date();
-      if (now.getHours() === 0 && now.getMinutes() === 0) {
+      const localNow = new Date(
+        now.toLocaleString("en-US", { timeZone: this.timeZone })
+      );
+      if (localNow.getHours() === 0 && localNow.getMinutes() === 0) {
         this.updatePrayerTimes();
       }
-    }, 60000); // Check every minute
+    }, 60000);
   }
 
   public getNextPrayer(): Prayer {
@@ -52,6 +58,10 @@ export class PrayerService {
     }
 
     const now = new Date();
+    const localNow = new Date(
+      now.toLocaleString("en-US", { timeZone: this.timeZone })
+    );
+
     const prayers: Prayer[] = [
       { name: "Fajr", time: this.prayerTimes!.fajr },
       { name: "Dhuhr", time: this.prayerTimes!.dhuhr },
@@ -60,7 +70,7 @@ export class PrayerService {
       { name: "Isha", time: this.prayerTimes!.isha },
     ];
 
-    const nextPrayer = prayers.find((prayer) => prayer.time > now);
+    const nextPrayer = prayers.find((prayer) => prayer.time > localNow);
     return (
       nextPrayer || {
         ...prayers[0],
@@ -76,17 +86,45 @@ export class PrayerService {
   }
 
   public isInPrayerTime(time?: Date): boolean {
+    if (!this.prayerTimes) {
+      this.updatePrayerTimes();
+    }
+
     const checkTime = time || new Date();
-    const nextPrayer = this.getNextPrayer();
+    const localCheckTime = new Date(
+      checkTime.toLocaleString("en-US", { timeZone: this.timeZone })
+    );
 
-    // Check if we're within the prayer window
-    const prayerStart = new Date(nextPrayer.time);
-    prayerStart.setMinutes(prayerStart.getMinutes() - 10); // 10 minutes before prayer
+    // Get all prayer times for the day
+    const prayers = [
+      { name: "Fajr", time: this.prayerTimes!.fajr },
+      { name: "Dhuhr", time: this.prayerTimes!.dhuhr },
+      { name: "Asr", time: this.prayerTimes!.asr },
+      { name: "Maghrib", time: this.prayerTimes!.maghrib },
+      { name: "Isha", time: this.prayerTimes!.isha },
+    ];
 
-    const prayerEnd = new Date(nextPrayer.time);
-    prayerEnd.setMinutes(prayerEnd.getMinutes() + this.prayerWindowMinutes);
+    // Check each prayer time
+    for (const prayer of prayers) {
+      // Convert prayer time to local time zone
+      const prayerTime = new Date(
+        prayer.time.toLocaleString("en-US", { timeZone: this.timeZone })
+      );
 
-    return checkTime >= prayerStart && checkTime <= prayerEnd;
+      // Calculate window boundaries
+      const windowStart = new Date(prayerTime);
+      windowStart.setMinutes(windowStart.getMinutes() - 10);
+
+      const windowEnd = new Date(prayerTime);
+      windowEnd.setMinutes(windowEnd.getMinutes() + this.prayerWindowMinutes);
+
+      // Check if current time is within this prayer's window
+      if (localCheckTime >= windowStart && localCheckTime <= windowEnd) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   public cleanup(): void {

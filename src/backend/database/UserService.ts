@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { BaseService } from "./BaseService";
-import { User } from "../../shared/types/entities";
+import { User, UserRole } from "../../shared/types/entities";
 import { UserRecord } from "../../shared/types/database";
 import { DatabaseError, ValidationError } from "../../shared/types/errors";
 import { z } from "zod";
@@ -17,7 +17,7 @@ export class UserService extends BaseService {
   async createUser(
     username: string,
     password: string,
-    role: User["role"]
+    role: UserRole
   ): Promise<number> {
     try {
       // Validate input data
