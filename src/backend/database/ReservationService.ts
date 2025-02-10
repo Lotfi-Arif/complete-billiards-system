@@ -1,266 +1,302 @@
-import Database from "better-sqlite3";
+// src/backend/database/ReservationService.ts
+import { Database } from "better-sqlite3";
 import { BaseService } from "./BaseService";
-import { Reservation } from "../../shared/types/entities";
-import { ReservationRecord } from "../../shared/types/database";
-import { DatabaseError, ValidationError } from "../../shared/types/errors";
+import {
+  Reservation,
+  ReservationStatus,
+  CreateReservationDTO,
+  UpdateReservationDTO,
+} from "@/shared/types/Reservation";
+import {
+  DatabaseError,
+  NotFoundError,
+  BusinessError,
+} from "@/shared/types/errors";
+import { TableService } from "./TableService";
 import { PrayerService } from "../prayer/PrayerService";
 
 export class ReservationService extends BaseService {
-  private prayerService?: PrayerService;
-  private readonly MIN_ADVANCE_TIME = 30; // minutes
-  private readonly MAX_ADVANCE_DAYS = 7; // days
-  private readonly RESERVATION_DURATION = 120; // minutes
+  private tableService: TableService;
+  private prayerService: PrayerService;
 
-  constructor(db: Database.Database, prayerService?: PrayerService) {
+  constructor(db: Database) {
     super(db);
-    this.prayerService = prayerService;
+    this.tableService = new TableService(db);
+    this.prayerService = new PrayerService();
+    this.initializeTable();
   }
 
-  async createReservation(
-    tableId: number,
-    customerId: number,
-    staffId: number,
-    reservationTime: Date
-  ): Promise<number> {
+  private initializeTable(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS reservations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tableId INTEGER NOT NULL,
+        customerId INTEGER NOT NULL,
+        startTime DATETIME NOT NULL,
+        endTime DATETIME NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        notes TEXT,
+        createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (tableId) REFERENCES tables(id),
+        FOREIGN KEY (customerId) REFERENCES users(id)
+      )
+    `);
+  }
+
+  private async validateReservationTime(
+    data: CreateReservationDTO
+  ): Promise<void> {
+    const now = new Date();
+    const minAdvanceTime = 30; // minutes
+    const maxAdvanceDays = 7; // days
+
+    // Check minimum advance time
+    const minutesToStart =
+      (data.startTime.getTime() - now.getTime()) / (1000 * 60);
+    if (minutesToStart < minAdvanceTime) {
+      throw new BusinessError(
+        `Reservations must be made at least ${minAdvanceTime} minutes in advance`
+      );
+    }
+
+    // Check maximum advance time
+    const daysInAdvance =
+      (data.startTime.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+    if (daysInAdvance > maxAdvanceDays) {
+      throw new BusinessError(
+        `Reservations cannot be made more than ${maxAdvanceDays} days in advance`
+      );
+    }
+
+    // Check prayer times
+    if (
+      (await this.prayerService.isInPrayerTime(data.startTime)) ||
+      (await this.prayerService.isInPrayerTime(data.endTime))
+    ) {
+      throw new BusinessError("Cannot make reservations during prayer times");
+    }
+
+    // Check table exists
+    await this.tableService.getTableById(data.tableId);
+  }
+
+  private async checkTimeConflict(
+    data: CreateReservationDTO,
+    excludeReservationId?: number
+  ): Promise<void> {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) as count 
+      FROM reservations 
+      WHERE tableId = ? 
+      AND status IN ('PENDING', 'CONFIRMED')
+      AND id != COALESCE(?, -1)
+      AND (
+        (startTime <= ? AND endTime > ?) OR
+        (startTime < ? AND endTime >= ?) OR
+        (startTime >= ? AND endTime <= ?)
+      )
+    `);
+
+    const result = stmt.get(
+      data.tableId,
+      excludeReservationId,
+      data.endTime.toISOString(),
+      data.startTime.toISOString(),
+      data.endTime.toISOString(),
+      data.startTime.toISOString(),
+      data.startTime.toISOString(),
+      data.endTime.toISOString()
+    ) as { count: number };
+
+    if (result.count > 0) {
+      throw new BusinessError("Time slot conflicts with existing reservation");
+    }
+  }
+
+  async createReservation(data: CreateReservationDTO): Promise<Reservation> {
     try {
-      return this.db.transaction(() => {
-        try {
-          // Validate reservation time
-          this.validateReservationTime(reservationTime);
+      await this.validateReservationTime(data);
+      await this.checkTimeConflict(data);
 
-          // Check if table exists and is available for reservation
-          const tableStatus = this.prepareStatement<
-            [number],
-            { status: string }
-          >("SELECT status FROM pool_tables WHERE id = ?").get(tableId);
+      const stmt = this.db.prepare(`
+        INSERT INTO reservations (
+          tableId,
+          customerId,
+          startTime,
+          endTime,
+          notes,
+          status
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `);
 
-          if (!tableStatus) {
-            throw new ValidationError("Table not found");
-          }
+      const result = this.transaction(() => {
+        return stmt.run(
+          data.tableId,
+          data.customerId,
+          data.startTime.toISOString(),
+          data.endTime.toISOString(),
+          data.notes || null,
+          ReservationStatus.PENDING
+        );
+      });
 
-          // Check for conflicting reservations
-          const hasConflict = this.checkTimeConflict(tableId, reservationTime);
-          if (hasConflict) {
-            throw new ValidationError(
-              "Table already reserved for this time slot"
-            );
-          }
+      if (!result.lastInsertRowid) {
+        throw new DatabaseError("Failed to create reservation");
+      }
 
-          // Create reservation
-          const result = this.prepareStatement<
-            [number, number, number, string],
-            ReservationRecord
-          >(
-            `INSERT INTO reservations (
-              table_id, customer_id, staff_id, reservation_time, status
-            ) VALUES (?, ?, ?, ?, 'pending')`
-          ).run(tableId, customerId, staffId, reservationTime.toISOString());
-
-          const reservationId = Number(result.lastInsertRowid);
-
-          this.logActivity("reservation", reservationId, "created", staffId, {
-            tableId,
-            customerId,
-            reservationTime: reservationTime.toISOString(),
-          });
-
-          return reservationId;
-        } catch (error) {
-          // Re-throw ValidationErrors as-is
-          if (error instanceof ValidationError) {
-            throw error;
-          }
-          // Wrap other errors as DatabaseErrors
-          throw new DatabaseError("Failed to create reservation", { error });
-        }
-      })();
+      return this.getReservationById(Number(result.lastInsertRowid));
     } catch (error) {
-      // Re-throw ValidationErrors and DatabaseErrors as-is
-      if (error instanceof ValidationError || error instanceof DatabaseError) {
+      if (error instanceof BusinessError || error instanceof NotFoundError) {
         throw error;
       }
-      // Wrap any other errors as DatabaseErrors
       throw new DatabaseError("Failed to create reservation", { error });
     }
   }
 
-  async confirmReservation(
-    reservationId: number,
-    staffId: number
-  ): Promise<void> {
+  async confirmReservation(id: number): Promise<Reservation> {
     try {
-      const result = this.prepareStatement<[number], void>(
-        "UPDATE reservations SET status = 'confirmed' WHERE id = ?"
-      ).run(reservationId);
+      const reservation = await this.getReservationById(id);
 
-      if (result.changes === 0) {
-        throw new ValidationError("Reservation not found");
+      if (reservation.status !== ReservationStatus.PENDING) {
+        throw new BusinessError(`Reservation ${id} is not in pending status`);
       }
 
-      this.logActivity("reservation", reservationId, "confirmed", staffId);
+      // Recheck conflicts before confirming
+      await this.checkTimeConflict(
+        {
+          tableId: reservation.tableId,
+          customerId: reservation.customerId,
+          startTime: reservation.startTime,
+          endTime: reservation.endTime,
+        },
+        id
+      );
+
+      const stmt = this.db.prepare(`
+        UPDATE reservations
+        SET status = ?, updatedAt = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `);
+
+      const result = this.transaction(() => {
+        return stmt.run(ReservationStatus.CONFIRMED, id);
+      });
+
+      if (result.changes === 0) {
+        throw new NotFoundError(`Reservation with id ${id} not found`);
+      }
+
+      return this.getReservationById(id);
     } catch (error) {
-      if (error instanceof ValidationError) {
+      if (error instanceof BusinessError || error instanceof NotFoundError) {
         throw error;
       }
       throw new DatabaseError("Failed to confirm reservation", { error });
     }
   }
 
-  async cancelReservation(
-    reservationId: number,
-    staffId: number,
-    reason?: string
-  ): Promise<void> {
+  async cancelReservation(id: number): Promise<Reservation> {
     try {
-      const result = this.prepareStatement<[number], void>(
-        "UPDATE reservations SET status = 'cancelled' WHERE id = ?"
-      ).run(reservationId);
+      const reservation = await this.getReservationById(id);
 
-      if (result.changes === 0) {
-        throw new ValidationError("Reservation not found");
+      if (
+        ![ReservationStatus.PENDING, ReservationStatus.CONFIRMED].includes(
+          reservation.status
+        )
+      ) {
+        throw new BusinessError(`Reservation ${id} cannot be cancelled`);
       }
 
-      this.logActivity("reservation", reservationId, "cancelled", staffId, {
-        reason,
+      const stmt = this.db.prepare(`
+        UPDATE reservations
+        SET status = ?, updatedAt = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `);
+
+      const result = this.transaction(() => {
+        return stmt.run(ReservationStatus.CANCELLED, id);
       });
+
+      if (result.changes === 0) {
+        throw new NotFoundError(`Reservation with id ${id} not found`);
+      }
+
+      return this.getReservationById(id);
     } catch (error) {
-      if (error instanceof ValidationError) {
+      if (error instanceof BusinessError || error instanceof NotFoundError) {
         throw error;
       }
       throw new DatabaseError("Failed to cancel reservation", { error });
     }
   }
 
-  async getReservation(reservationId: number): Promise<Reservation | null> {
-    try {
-      const record = this.prepareStatement<[number], ReservationRecord>(
-        `SELECT 
-          r.*,
-          c.username as customer_name,
-          s.username as staff_name
-        FROM reservations r
-        JOIN users c ON r.customer_id = c.id
-        JOIN users s ON r.staff_id = s.id
-        WHERE r.id = ?`
-      ).get(reservationId);
+  async getReservationById(id: number): Promise<Reservation> {
+    const stmt = this.db.prepare("SELECT * FROM reservations WHERE id = ?");
+    const reservation = stmt.get(id) as Reservation | undefined;
 
-      return record ? this.mapReservationRecord(record) : null;
-    } catch (error) {
-      throw new DatabaseError("Failed to get reservation", { error });
+    if (!reservation) {
+      throw new NotFoundError(`Reservation with id ${id} not found`);
     }
+
+    return {
+      ...reservation,
+      startTime: new Date(reservation.startTime),
+      endTime: new Date(reservation.endTime),
+      createdAt: new Date(reservation.createdAt),
+      updatedAt: new Date(reservation.updatedAt),
+    };
   }
 
-  async getTableReservations(
-    tableId: number,
-    startDate: Date,
-    endDate: Date
-  ): Promise<Reservation[]> {
-    try {
-      const records = this.prepareStatement<
-        [number, string, string],
-        ReservationRecord
-      >(
-        `SELECT 
-          r.*,
-          c.username as customer_name,
-          s.username as staff_name
-        FROM reservations r
-        JOIN users c ON r.customer_id = c.id
-        JOIN users s ON r.staff_id = s.id
-        WHERE r.table_id = ?
-        AND r.reservation_time BETWEEN ? AND ?
-        AND r.status IN ('pending', 'confirmed')
-        ORDER BY r.reservation_time ASC`
-      ).all(tableId, startDate.toISOString(), endDate.toISOString());
+  async getTableReservations(tableId: number): Promise<Reservation[]> {
+    const stmt = this.db.prepare(
+      "SELECT * FROM reservations WHERE tableId = ?"
+    );
+    const reservations = stmt.all(tableId) as Reservation[];
 
-      return records.map(this.mapReservationRecord);
-    } catch (error) {
-      throw new DatabaseError("Failed to get table reservations", { error });
-    }
+    return reservations.map((reservation) => ({
+      ...reservation,
+      startTime: new Date(reservation.startTime),
+      endTime: new Date(reservation.endTime),
+      createdAt: new Date(reservation.createdAt),
+      updatedAt: new Date(reservation.updatedAt),
+    }));
   }
 
   async getCustomerReservations(customerId: number): Promise<Reservation[]> {
-    try {
-      const records = this.prepareStatement<[number], ReservationRecord>(
-        `SELECT 
-          r.*,
-          c.username as customer_name,
-          s.username as staff_name
-        FROM reservations r
-        JOIN users c ON r.customer_id = c.id
-        JOIN users s ON r.staff_id = s.id
-        WHERE r.customer_id = ?
-        AND r.status IN ('pending', 'confirmed')
-        ORDER BY r.reservation_time ASC`
-      ).all(customerId);
-
-      return records.map(this.mapReservationRecord);
-    } catch (error) {
-      throw new DatabaseError("Failed to get customer reservations", { error });
-    }
-  }
-
-  private validateReservationTime(reservationTime: Date): void {
-    const now = new Date();
-    const minutesUntilReservation =
-      (reservationTime.getTime() - now.getTime()) / (1000 * 60);
-    const daysUntilReservation = minutesUntilReservation / (24 * 60);
-
-    // Check minimum advance time
-    if (minutesUntilReservation < this.MIN_ADVANCE_TIME) {
-      throw new ValidationError(
-        `Reservations must be made at least ${this.MIN_ADVANCE_TIME} minutes in advance`
-      );
-    }
-
-    // Check maximum advance time
-    if (daysUntilReservation > this.MAX_ADVANCE_DAYS) {
-      throw new ValidationError(
-        `Reservations cannot be made more than ${this.MAX_ADVANCE_DAYS} days in advance`
-      );
-    }
-
-    // Check prayer time conflicts
-    if (this.prayerService?.isInPrayerTime(reservationTime)) {
-      throw new ValidationError("Cannot make reservations during prayer times");
-    }
-  }
-
-  private checkTimeConflict(tableId: number, reservationTime: Date): boolean {
-    const reservationEnd = new Date(
-      reservationTime.getTime() + this.RESERVATION_DURATION * 60 * 1000
+    const stmt = this.db.prepare(
+      "SELECT * FROM reservations WHERE customerId = ?"
     );
+    const reservations = stmt.all(customerId) as Reservation[];
 
-    const conflictingReservation = this.prepareStatement<
-      [number, string, string, string],
-      { id: number }
-    >(
-      `SELECT id 
-       FROM reservations 
-       WHERE table_id = ? 
-       AND reservation_time < ? 
-       AND datetime(reservation_time, '+' || ? || ' minutes') > ?
-       AND status IN ('pending', 'confirmed')`
-    ).get(
-      tableId,
-      reservationEnd.toISOString(),
-      this.RESERVATION_DURATION.toString(),
-      reservationTime.toISOString()
-    );
-
-    return !!conflictingReservation;
+    return reservations.map((reservation) => ({
+      ...reservation,
+      startTime: new Date(reservation.startTime),
+      endTime: new Date(reservation.endTime),
+      createdAt: new Date(reservation.createdAt),
+      updatedAt: new Date(reservation.updatedAt),
+    }));
   }
 
-  private mapReservationRecord(record: ReservationRecord): Reservation {
-    return {
-      id: record.id,
-      tableId: record.table_id,
-      customerId: record.customer_id,
-      staffId: record.staff_id,
-      reservationTime: new Date(record.reservation_time),
-      status: record.status,
-      customerName: record.customer_name,
-      staffName: record.staff_name,
-    };
+  async getActiveReservations(): Promise<Reservation[]> {
+    const stmt = this.db.prepare(`
+      SELECT * FROM reservations 
+      WHERE status IN (?, ?) 
+      AND endTime > CURRENT_TIMESTAMP
+      ORDER BY startTime ASC
+    `);
+
+    const reservations = stmt.all(
+      ReservationStatus.PENDING,
+      ReservationStatus.CONFIRMED
+    ) as Reservation[];
+
+    return reservations.map((reservation) => ({
+      ...reservation,
+      startTime: new Date(reservation.startTime),
+      endTime: new Date(reservation.endTime),
+      createdAt: new Date(reservation.createdAt),
+      updatedAt: new Date(reservation.updatedAt),
+    }));
   }
 }

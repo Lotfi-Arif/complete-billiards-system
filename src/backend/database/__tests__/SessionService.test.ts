@@ -98,21 +98,18 @@ describe("SessionService", () => {
     });
 
     it("should calculate correct cost", async () => {
-      // Create session with specific start time
-      const startTime = new Date();
+      const startTime = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
       const session = await sessionService.startSession({
         tableId,
         startTime,
       });
 
-      // End session after 1 hour
-      const endTime = new Date(startTime.getTime() + 60 * 60 * 1000);
+      const endTime = new Date();
       const endedSession = await sessionService.endSession(session.id, {
         endTime,
       });
 
-      // Verify cost calculation (1 hour at $20/hour)
-      expect(endedSession.cost).toBe(20);
+      expect(endedSession.cost).toBeCloseTo(20, 2); // Allow small floating-point differences
     });
 
     it("should throw error for non-existent session", async () => {

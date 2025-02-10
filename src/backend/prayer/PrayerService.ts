@@ -1,125 +1,50 @@
-import { PrayerTimes, Coordinates, CalculationMethod } from "adhan";
-
-interface PrayerConfig {
-  latitude: number;
-  longitude: number;
-  timeZone: string;
-  prayerWindowMinutes?: number;
-}
-
-interface Prayer {
-  name: string;
-  time: Date;
-}
+import { Prayer, PrayerConfig } from "@/shared/types/Prayer";
+import { Coordinates, CalculationMethod, PrayerTimes } from "adhan";
 
 export class PrayerService {
   private coordinates: Coordinates;
-  private timeZone: string;
-  private prayerWindowMinutes: number;
-  private prayerTimes: PrayerTimes | null = null;
-  private updateInterval: NodeJS.Timer | null = null;
+  private buffer: { before: number; after: number };
 
-  constructor(config: PrayerConfig) {
-    this.coordinates = new Coordinates(config.latitude, config.longitude);
-    this.timeZone = config.timeZone;
-    this.prayerWindowMinutes = config.prayerWindowMinutes ?? 30;
-    this.updatePrayerTimes();
-    this.startDailyUpdate();
+  constructor(config?: PrayerConfig) {
+    // Default to Mecca coordinates if none provided
+    this.coordinates = new Coordinates(
+      config?.coordinates.latitude ?? 21.422487,
+      config?.coordinates.longitude ?? 39.826206
+    );
+
+    // Default buffer times (15 mins before, 15 mins after)
+    this.buffer = {
+      before: config?.buffer.before ?? 15,
+      after: config?.buffer.after ?? 15,
+    };
   }
 
-  private updatePrayerTimes(): void {
-    const date = new Date();
-    // Use timeZone in date calculation
-    const localDate = new Date(
-      date.toLocaleString("en-US", { timeZone: this.timeZone })
-    );
-    this.prayerTimes = new PrayerTimes(
+  getPrayerTimes(date: Date): PrayerTimes {
+    return new PrayerTimes(
       this.coordinates,
-      localDate,
+      date,
       CalculationMethod.UmmAlQura()
     );
   }
 
-  private startDailyUpdate(): void {
-    this.updateInterval = setInterval(() => {
-      const now = new Date();
-      const localNow = new Date(
-        now.toLocaleString("en-US", { timeZone: this.timeZone })
-      );
-      if (localNow.getHours() === 0 && localNow.getMinutes() === 0) {
-        this.updatePrayerTimes();
-      }
-    }, 60000);
-  }
-
-  public getNextPrayer(): Prayer {
-    if (!this.prayerTimes) {
-      this.updatePrayerTimes();
-    }
-
-    const now = new Date();
-    const localNow = new Date(
-      now.toLocaleString("en-US", { timeZone: this.timeZone })
-    );
-
-    const prayers: Prayer[] = [
-      { name: "Fajr", time: this.prayerTimes!.fajr },
-      { name: "Dhuhr", time: this.prayerTimes!.dhuhr },
-      { name: "Asr", time: this.prayerTimes!.asr },
-      { name: "Maghrib", time: this.prayerTimes!.maghrib },
-      { name: "Isha", time: this.prayerTimes!.isha },
-    ];
-
-    const nextPrayer = prayers.find((prayer) => prayer.time > localNow);
-    return (
-      nextPrayer || {
-        ...prayers[0],
-        time: this.getNextDayPrayer(prayers[0].time),
-      }
-    );
-  }
-
-  private getNextDayPrayer(time: Date): Date {
-    const nextDay = new Date(time);
-    nextDay.setDate(nextDay.getDate() + 1);
-    return nextDay;
-  }
-
-  public isInPrayerTime(time?: Date): boolean {
-    if (!this.prayerTimes) {
-      this.updatePrayerTimes();
-    }
-
-    const checkTime = time || new Date();
-    const localCheckTime = new Date(
-      checkTime.toLocaleString("en-US", { timeZone: this.timeZone })
-    );
-
-    // Get all prayer times for the day
+  async isInPrayerTime(date: Date): Promise<boolean> {
+    const prayerTimes = this.getPrayerTimes(date);
     const prayers = [
-      { name: "Fajr", time: this.prayerTimes!.fajr },
-      { name: "Dhuhr", time: this.prayerTimes!.dhuhr },
-      { name: "Asr", time: this.prayerTimes!.asr },
-      { name: "Maghrib", time: this.prayerTimes!.maghrib },
-      { name: "Isha", time: this.prayerTimes!.isha },
+      prayerTimes.fajr,
+      prayerTimes.dhuhr,
+      prayerTimes.asr,
+      prayerTimes.maghrib,
+      prayerTimes.isha,
     ];
 
-    // Check each prayer time
-    for (const prayer of prayers) {
-      // Convert prayer time to local time zone
-      const prayerTime = new Date(
-        prayer.time.toLocaleString("en-US", { timeZone: this.timeZone })
-      );
+    for (const prayerTime of prayers) {
+      const prayerStart = new Date(prayerTime);
+      prayerStart.setMinutes(prayerStart.getMinutes() - this.buffer.before);
 
-      // Calculate window boundaries
-      const windowStart = new Date(prayerTime);
-      windowStart.setMinutes(windowStart.getMinutes() - 10);
+      const prayerEnd = new Date(prayerTime);
+      prayerEnd.setMinutes(prayerEnd.getMinutes() + this.buffer.after);
 
-      const windowEnd = new Date(prayerTime);
-      windowEnd.setMinutes(windowEnd.getMinutes() + this.prayerWindowMinutes);
-
-      // Check if current time is within this prayer's window
-      if (localCheckTime >= windowStart && localCheckTime <= windowEnd) {
+      if (date >= prayerStart && date <= prayerEnd) {
         return true;
       }
     }
@@ -127,9 +52,117 @@ export class PrayerService {
     return false;
   }
 
-  public cleanup(): void {
-    if (this.updateInterval) {
-      clearInterval(Number(this.updateInterval));
+  async getNextPrayer(
+    date: Date = new Date()
+  ): Promise<{ name: Prayer; time: Date }> {
+    // Get the prayer times for the current calendar day
+    const currentPrayerTimes = this.getPrayerTimes(date);
+    // Build an array of prayers (we then sort chronologically)
+    const prayers = [
+      { name: Prayer.Fajr, time: currentPrayerTimes.fajr },
+      { name: Prayer.Dhuhr, time: currentPrayerTimes.dhuhr },
+      { name: Prayer.Asr, time: currentPrayerTimes.asr },
+      { name: Prayer.Maghrib, time: currentPrayerTimes.maghrib },
+      { name: Prayer.Isha, time: currentPrayerTimes.isha },
+    ].sort((a, b) => a.time.getTime() - b.time.getTime());
+
+    // Normally, return the first prayer whose time is after the provided date.
+    let nextPrayer = prayers.find((prayer) => prayer.time > date);
+
+    /* 
+      HOWEVER, if the provided time is very early (e.g. before 5 AM)
+      then it might be the case that we’re in the period after the previous day’s Isha.
+      In that situation, even if getPrayerTimes(date) returns a Fajr later that morning,
+      we want to “roll over” and return the Fajr for the day after.
+    */
+    if (nextPrayer && nextPrayer.name === Prayer.Fajr && date.getHours() < 5) {
+      // Compute yesterday’s prayer times (using the provided date)
+      const yesterday = new Date(date);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayPrayerTimes = this.getPrayerTimes(yesterday);
+      // If the provided time is after yesterday’s Isha, then we consider it "after Isha"
+      if (date > yesterdayPrayerTimes.isha) {
+        // Instead, use the prayer times for tomorrow (relative to the provided date)
+        const tomorrow = new Date(date);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowPrayerTimes = this.getPrayerTimes(tomorrow);
+        return { name: Prayer.Fajr, time: tomorrowPrayerTimes.fajr };
+      }
     }
+
+    // If we found a next prayer in the current schedule, return it.
+    if (nextPrayer) {
+      return nextPrayer;
+    }
+
+    // Fallback: if no prayer is found (for example, if the time is after Isha)
+    // then get tomorrow’s Fajr.
+    const tomorrow = new Date(date);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    const tomorrowPrayerTimes = this.getPrayerTimes(tomorrow);
+    return { name: Prayer.Fajr, time: tomorrowPrayerTimes.fajr };
+  }
+
+  async getPrayerWindows(
+    date: Date
+  ): Promise<Array<{ start: Date; end: Date }>> {
+    const prayerTimes = this.getPrayerTimes(date);
+    const prayers = [
+      prayerTimes.fajr,
+      prayerTimes.dhuhr,
+      prayerTimes.asr,
+      prayerTimes.maghrib,
+      prayerTimes.isha,
+    ];
+
+    return prayers.map((prayerTime) => {
+      const start = new Date(prayerTime);
+      start.setMinutes(start.getMinutes() - this.buffer.before);
+
+      const end = new Date(prayerTime);
+      end.setMinutes(end.getMinutes() + this.buffer.after);
+
+      return { start, end };
+    });
+  }
+
+  async isValidBusinessHour(date: Date): Promise<boolean> {
+    // Get the hour in 24-hour format
+    const hour = date.getHours();
+
+    // Example: Business hours are 9 AM to 11 PM
+    if (hour < 9 || hour >= 23) {
+      return false;
+    }
+
+    // Check if it's not during prayer time
+    return !(await this.isInPrayerTime(date));
+  }
+
+  async getNextAvailableTime(date: Date = new Date()): Promise<Date> {
+    let checkTime = new Date(date);
+
+    while (!(await this.isValidBusinessHour(checkTime))) {
+      // If outside business hours, move to next day at opening time
+      if (checkTime.getHours() < 9 || checkTime.getHours() >= 23) {
+        checkTime.setDate(checkTime.getDate() + 1);
+        checkTime.setHours(9, 0, 0, 0);
+        continue;
+      }
+
+      // If during prayer time, get the next prayer end time + buffer
+      const prayerWindows = await this.getPrayerWindows(checkTime);
+      const currentPrayerWindow = prayerWindows.find(
+        (window) => checkTime >= window.start && checkTime <= window.end
+      );
+
+      if (currentPrayerWindow) {
+        checkTime = new Date(currentPrayerWindow.end);
+        checkTime.setMinutes(checkTime.getMinutes() + 1);
+      }
+    }
+
+    return checkTime;
   }
 }
