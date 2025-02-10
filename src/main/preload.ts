@@ -1,4 +1,3 @@
-// src/main/preload.ts
 import { contextBridge, ipcRenderer } from "electron";
 import type { IpcChannels } from "../shared/types/ipc";
 

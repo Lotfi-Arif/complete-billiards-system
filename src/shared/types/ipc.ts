@@ -4,17 +4,24 @@ export enum IpcChannels {
   USER_CREATE = "user:create",
 
   // Table Management
-  TABLE_START = "table:start",
-  TABLE_END = "table:end",
-  TABLE_STATUS = "table:status",
+  TABLE_GET_ALL = "table:getAll",
+  TABLE_UPDATE_STATUS = "table:updateStatus",
+  TABLE_MAINTENANCE = "table:maintenance",
+
+  // Session Management
+  SESSION_START = "session:start",
+  SESSION_END = "session:end",
+
+  // Reservation Management
+  RESERVATION_CREATE = "reservation:create",
+  RESERVATION_CONFIRM = "reservation:confirm",
 
   // Prayer Time Management
-  PRAYER_NEXT = "prayer:next",
-  PRAYER_STATUS = "prayer:status",
+  PRAYER_GET_NEXT = "prayer:getNext",
+  PRAYER_CHECK_TIME = "prayer:checkTime",
 
-  // Reservations
-  RESERVATION_CREATE = "reservation:create",
-  RESERVATION_CANCEL = "reservation:cancel",
+  // System Status
+  SYSTEM_STATUS = "system:status",
 }
 
 export interface IpcHandlers {

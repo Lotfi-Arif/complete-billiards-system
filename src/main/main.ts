@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import * as path from "path";
 import isDev from "electron-is-dev";
 import { registerIpcHandlers } from "./ipc/handlers";
@@ -13,26 +13,53 @@ class MainProcess {
   private prayer: PrayerService;
 
   constructor() {
-    this.db = new DatabaseService({ filename: "pool-manager.db" });
-    this.arduino = new ArduinoService();
+    // Initialize core services
+    this.db = new DatabaseService({
+      filename: path.join(app.getPath("userData"), "pool-manager.db"),
+    });
+
+    this.arduino = new ArduinoService({
+      baudRate: 9600,
+      autoConnect: true,
+    });
+
     this.prayer = new PrayerService({
-      latitude: 21.4225, // Default coordinates (should be configurable)
+      latitude: 21.4225, // Default coordinates (configurable)
       longitude: 39.8262,
       timeZone: "Asia/Riyadh",
+      prayerWindowMinutes: 30,
     });
   }
 
   async initialize() {
-    await app.whenReady();
-    this.createWindow();
-    this.setupHandlers();
-    this.setupAppEvents();
+    try {
+      // Wait for app to be ready
+      await app.whenReady();
+
+      // Create main window
+      this.createWindow();
+
+      // Register IPC handlers
+      registerIpcHandlers(this.db, this.arduino, this.prayer);
+
+      // Set up app event handlers
+      this.setupAppEvents();
+
+      // Try to connect Arduino
+      await this.arduino.connect().catch(console.error);
+    } catch (error) {
+      console.error("Failed to initialize application:", error);
+      app.quit();
+    }
   }
 
   private createWindow() {
+    // Create the browser window
     this.mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
+      minWidth: 800,
+      minHeight: 600,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -40,42 +67,72 @@ class MainProcess {
       },
     });
 
+    // Load the app
     if (isDev) {
+      // In development, load from React dev server
       this.mainWindow.loadURL("http://localhost:3000");
+      // Open DevTools
       this.mainWindow.webContents.openDevTools();
     } else {
+      // In production, load the built app
       this.mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
     }
-  }
 
-  private setupHandlers() {
-    registerIpcHandlers(this.db, this.arduino, this.prayer);
+    // Handle window close
+    this.mainWindow.on("closed", () => {
+      this.mainWindow = null;
+    });
   }
 
   private setupAppEvents() {
-    app.on("window-all-closed", () => {
-      if (process.platform !== "darwin") {
-        app.quit();
-      }
-    });
-
+    // Handle macOS specific behavior
     app.on("activate", () => {
       if (!this.mainWindow) {
         this.createWindow();
       }
     });
 
-    app.on("before-quit", () => {
-      this.cleanup();
+    // Handle window-all-closed event
+    app.on("window-all-closed", () => {
+      if (process.platform !== "darwin") {
+        app.quit();
+      }
+    });
+
+    // Clean up before quit
+    app.on("before-quit", async () => {
+      await this.cleanup();
+    });
+
+    // Handle uncaught exceptions
+    process.on("uncaughtException", (error) => {
+      console.error("Uncaught exception:", error);
+      this.mainWindow?.webContents.send("system:error", {
+        type: "uncaught-exception",
+        message: error.message,
+      });
     });
   }
 
-  private cleanup() {
-    this.db.cleanup();
-    this.arduino.cleanup();
+  private async cleanup() {
+    try {
+      // Clean up services
+      this.db.cleanup();
+      this.arduino.cleanup();
+
+      // Additional cleanup
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.close();
+      }
+    } catch (error) {
+      console.error("Error during cleanup:", error);
+    }
   }
 }
 
-// Start the application
+// Create and initialize the application
 const mainProcess = new MainProcess();
-mainProcess.initialize().catch(console.error);
+mainProcess.initialize().catch((error) => {
+  console.error("Failed to start application:", error);
+  app.quit();
+});

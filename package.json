@@ -5,7 +5,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "tsc && concurrently \"tsc -w\" \"electron .\"",
-    "test": "jest",
+    "test": "jest --setupFiles ./jest.setup.js",
     "build": "tsc -p electron.tsconfig.json && tsc -p renderer.tsconfig.json",
     "watch": "tsc -p electron.tsconfig.json -w",
     "lint": "eslint -c .eslintrc.js './src/**/*.{ts,tsx}'",

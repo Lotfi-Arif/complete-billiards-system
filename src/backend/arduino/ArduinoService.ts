@@ -1,175 +1,155 @@
 import { SerialPort } from "serialport";
-import { ArduinoError } from "../../shared/types/errors";
+import { ReadlineParser } from "@serialport/parser-readline";
+import EventEmitter from "events";
 
-export interface ArduinoConfig {
+interface ArduinoConfig {
   baudRate?: number;
+  port?: string;
   autoConnect?: boolean;
-  retryAttempts?: number;
-  retryDelay?: number;
 }
 
-export class ArduinoService {
+export class ArduinoService extends EventEmitter {
   private port: SerialPort | null = null;
-  private connectAttempts = 0;
-  private readonly config: Required<ArduinoConfig>;
-  private connectionPromise: Promise<void> | null = null;
-  private tableStates: Map<number, boolean> = new Map();
+  private parser: ReadlineParser | null = null;
+  private connected = false;
+  private readonly MAX_TABLES = 8; // UNO limitation using pins 2-9
 
   constructor(config: ArduinoConfig = {}) {
-    this.config = {
-      baudRate: config.baudRate ?? 9600,
-      autoConnect: config.autoConnect ?? true,
-      retryAttempts: config.retryAttempts ?? 3,
-      retryDelay: config.retryDelay ?? 1000,
-    };
+    super();
+    const defaultPort = process.platform === "win32" ? "COM3" : "/dev/ttyUSB0";
 
-    if (this.config.autoConnect) {
-      this.connect().catch((error) => {
-        console.error("Failed to auto-connect to Arduino:", error);
-      });
+    this.port = new SerialPort({
+      path: config.port || defaultPort,
+      baudRate: config.baudRate || 9600,
+    });
+
+    this.parser = this.port.pipe(new ReadlineParser({ delimiter: "\n" }));
+    this.setupEventListeners();
+
+    if (config.autoConnect !== false) {
+      this.connect();
     }
   }
 
-  public async connect(): Promise<void> {
-    if (this.connectionPromise) {
-      return this.connectionPromise;
-    }
-
-    this.connectionPromise = this.attemptConnection();
-    return this.connectionPromise;
-  }
-
-  private async attemptConnection(): Promise<void> {
-    while (this.connectAttempts < this.config.retryAttempts) {
-      try {
-        const ports = await SerialPort.list();
-        const arduinoPort = ports.find(
-          (port) =>
-            port.manufacturer?.toLowerCase().includes("arduino") ||
-            port.vendorId?.toLowerCase() === "2341"
-        );
-
-        if (!arduinoPort) {
-          throw new ArduinoError("Arduino board not found", {
-            availablePorts: ports.map((p) => ({
-              path: p.path,
-              manufacturer: p.manufacturer,
-            })),
-          });
-        }
-
-        this.port = new SerialPort({
-          path: arduinoPort.path,
-          baudRate: this.config.baudRate,
-        });
-
-        await new Promise<void>((resolve, reject) => {
-          if (!this.port)
-            return reject(new ArduinoError("Port not initialized"));
-
-          this.port.on("open", () => {
-            console.log("Arduino connection established");
-            resolve();
-          });
-
-          this.port.on("error", (error) => {
-            reject(new ArduinoError("Failed to open port", { error }));
-          });
-        });
-
-        // Setup error handler for future errors
-        this.port.on("error", (error) => {
-          console.error("Arduino error:", error);
-          this.handleConnectionError(error);
-        });
-
-        return;
-      } catch (error) {
-        this.connectAttempts++;
-        if (this.connectAttempts >= this.config.retryAttempts) {
-          this.connectionPromise = null;
-          throw new ArduinoError("Failed to connect to Arduino after retries", {
-            attempts: this.connectAttempts,
-            error,
-          });
-        }
-        await new Promise((resolve) =>
-          setTimeout(resolve, this.config.retryDelay)
-        );
-      }
-    }
-  }
-
-  private handleConnectionError(error: Error): void {
-    console.error("Arduino connection error:", error);
-    this.port = null;
-    this.connectionPromise = null;
-
-    if (this.config.autoConnect) {
-      this.connectAttempts = 0;
-      this.connect().catch(console.error);
-    }
-  }
-
-  public async toggleTable(tableId: number, state: boolean): Promise<void> {
+  async connect(): Promise<void> {
     try {
-      await this.ensureConnection();
+      if (this.connected) return;
 
-      const command = `TABLE_${tableId}:${state ? "ON" : "OFF"}\n`;
-      await this.sendCommand(command);
+      await new Promise<void>((resolve, reject) => {
+        if (!this.port) {
+          reject(new Error("Serial port not initialized"));
+          return;
+        }
 
-      this.tableStates.set(tableId, state);
-    } catch (error) {
-      throw new ArduinoError("Failed to toggle table", {
-        tableId,
-        state,
-        error,
+        this.port.open((err) => {
+          if (err) {
+            reject(err);
+          } else {
+            this.connected = true;
+            resolve();
+            this.emit("connected");
+          }
+        });
       });
+    } catch (error) {
+      this.emit("error", error);
+      throw error;
     }
   }
 
-  private async ensureConnection(): Promise<void> {
-    if (!this.port) {
-      await this.connect();
+  async toggleTable(tableId: number, state: boolean): Promise<void> {
+    if (!this.isConnected()) {
+      throw new Error("Arduino not connected");
     }
-  }
 
-  private async sendCommand(command: string): Promise<void> {
-    if (!this.port) {
-      throw new ArduinoError("Not connected to Arduino");
+    if (tableId < 1 || tableId > this.MAX_TABLES) {
+      throw new Error(
+        `Invalid table ID. Must be between 1 and ${this.MAX_TABLES}`
+      );
     }
+
+    const command = `T${tableId}:${state ? "1" : "0"}\n`;
 
     return new Promise((resolve, reject) => {
-      this.port!.write(command, (error) => {
+      this.port?.write(command, (error) => {
         if (error) {
-          reject(
-            new ArduinoError("Failed to send command", { command, error })
-          );
-        } else {
-          resolve();
+          reject(error);
+          return;
         }
+
+        // Wait for acknowledgment
+        const timeout = setTimeout(() => {
+          cleanup();
+          reject(new Error("Command timeout"));
+        }, 1000);
+
+        const handleResponse = (response: string) => {
+          if (response.trim() === "ACK") {
+            cleanup();
+            resolve();
+          } else if (response.startsWith("ERR")) {
+            cleanup();
+            reject(new Error(`Command failed: ${response}`));
+          }
+        };
+
+        const cleanup = () => {
+          clearTimeout(timeout);
+          this.parser?.removeListener("data", handleResponse);
+        };
+
+        this.parser?.once("data", handleResponse);
       });
     });
   }
 
-  public getTableState(tableId: number): boolean {
-    return this.tableStates.get(tableId) ?? false;
+  isConnected(): boolean {
+    return this.connected && this.port?.isOpen === true;
   }
 
-  public async cleanup(): Promise<void> {
-    if (this.port) {
-      return new Promise((resolve) => {
-        this.port!.close(() => {
-          this.port = null;
-          this.connectionPromise = null;
-          resolve();
+  async reset(): Promise<void> {
+    if (!this.isConnected()) {
+      throw new Error("Arduino not connected");
+    }
+
+    return new Promise((resolve, reject) => {
+      this.port?.write("RESET\n", (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        this.parser?.once("data", (response) => {
+          if (response.trim() === "ACK") {
+            resolve();
+          } else {
+            reject(new Error("Reset failed"));
+          }
         });
       });
-    }
+    });
   }
 
-  // For testing purposes
-  public isConnected(): boolean {
-    return this.port !== null;
+  private setupEventListeners(): void {
+    this.port?.on("error", (error) => {
+      this.connected = false;
+      this.emit("error", error);
+    });
+
+    this.port?.on("close", () => {
+      this.connected = false;
+      this.emit("disconnected");
+    });
+
+    this.parser?.on("data", (data) => {
+      this.emit("data", data);
+    });
+  }
+
+  cleanup(): void {
+    if (this.port?.isOpen) {
+      this.port.close();
+    }
+    this.connected = false;
   }
 }

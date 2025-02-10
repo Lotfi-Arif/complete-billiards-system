@@ -10,11 +10,11 @@ import { PrayerService } from "../prayer/PrayerService";
 import { PoolTable, User } from "@/shared/types/entities";
 
 export class DatabaseService {
+  public readonly userService: UserService;
+  public readonly tableService: TableService;
+  public readonly sessionService: SessionService;
+  public readonly reservationService: ReservationService;
   private db: Database.Database;
-  private userService: UserService;
-  private tableService: TableService;
-  private sessionService: SessionService;
-  private reservationService: ReservationService;
 
   constructor(
     config: DatabaseConfig,
