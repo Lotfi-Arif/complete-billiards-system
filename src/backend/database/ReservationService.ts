@@ -24,47 +24,62 @@ export class ReservationService extends BaseService {
   ): Promise<number> {
     try {
       return this.db.transaction(() => {
-        // Validate reservation time
-        this.validateReservationTime(reservationTime);
+        try {
+          // Validate reservation time
+          this.validateReservationTime(reservationTime);
 
-        // Check if table exists and is available for reservation
-        const tableStatus = this.prepareStatement<[number], { status: string }>(
-          "SELECT status FROM pool_tables WHERE id = ?"
-        ).get(tableId);
+          // Check if table exists and is available for reservation
+          const tableStatus = this.prepareStatement<
+            [number],
+            { status: string }
+          >("SELECT status FROM pool_tables WHERE id = ?").get(tableId);
 
-        if (!tableStatus) {
-          throw new ValidationError("Table not found");
+          if (!tableStatus) {
+            throw new ValidationError("Table not found");
+          }
+
+          // Check for conflicting reservations
+          const hasConflict = this.checkTimeConflict(tableId, reservationTime);
+          if (hasConflict) {
+            throw new ValidationError(
+              "Table already reserved for this time slot"
+            );
+          }
+
+          // Create reservation
+          const result = this.prepareStatement<
+            [number, number, number, string],
+            ReservationRecord
+          >(
+            `INSERT INTO reservations (
+              table_id, customer_id, staff_id, reservation_time, status
+            ) VALUES (?, ?, ?, ?, 'pending')`
+          ).run(tableId, customerId, staffId, reservationTime.toISOString());
+
+          const reservationId = Number(result.lastInsertRowid);
+
+          this.logActivity("reservation", reservationId, "created", staffId, {
+            tableId,
+            customerId,
+            reservationTime: reservationTime.toISOString(),
+          });
+
+          return reservationId;
+        } catch (error) {
+          // Re-throw ValidationErrors as-is
+          if (error instanceof ValidationError) {
+            throw error;
+          }
+          // Wrap other errors as DatabaseErrors
+          throw new DatabaseError("Failed to create reservation", { error });
         }
-
-        // Check for conflicting reservations
-        const hasConflict = this.checkTimeConflict(tableId, reservationTime);
-        if (hasConflict) {
-          throw new ValidationError(
-            "Table already reserved for this time slot"
-          );
-        }
-
-        // Create reservation
-        const result = this.prepareStatement<
-          [number, number, number, string],
-          ReservationRecord
-        >(
-          `INSERT INTO reservations (
-            table_id, customer_id, staff_id, reservation_time, status
-          ) VALUES (?, ?, ?, ?, 'pending')`
-        ).run(tableId, customerId, staffId, reservationTime.toISOString());
-
-        const reservationId = Number(result.lastInsertRowid);
-
-        this.logActivity("reservation", reservationId, "created", staffId, {
-          tableId,
-          customerId,
-          reservationTime: reservationTime.toISOString(),
-        });
-
-        return reservationId;
       })();
     } catch (error) {
+      // Re-throw ValidationErrors and DatabaseErrors as-is
+      if (error instanceof ValidationError || error instanceof DatabaseError) {
+        throw error;
+      }
+      // Wrap any other errors as DatabaseErrors
       throw new DatabaseError("Failed to create reservation", { error });
     }
   }
@@ -84,6 +99,9 @@ export class ReservationService extends BaseService {
 
       this.logActivity("reservation", reservationId, "confirmed", staffId);
     } catch (error) {
+      if (error instanceof ValidationError) {
+        throw error;
+      }
       throw new DatabaseError("Failed to confirm reservation", { error });
     }
   }
@@ -106,6 +124,9 @@ export class ReservationService extends BaseService {
         reason,
       });
     } catch (error) {
+      if (error instanceof ValidationError) {
+        throw error;
+      }
       throw new DatabaseError("Failed to cancel reservation", { error });
     }
   }

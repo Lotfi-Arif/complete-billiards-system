@@ -33,6 +33,11 @@ export abstract class BaseService {
     }
   }
 
+  protected transaction<T>(callback: () => T): T {
+    const result = this.db.transaction(callback)();
+    return result;
+  }
+
   protected prepareStatement<TParams extends unknown[], TResult>(
     sql: string
   ): Database.Statement<TParams, TResult> {

@@ -27,3 +27,13 @@ export class ValidationError extends ApplicationError {
     super(message, "VALIDATION_ERROR", details);
   }
 }
+
+export class NotFoundError extends ApplicationError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "NOT_FOUND", details);
+    this.name = this.constructor.name;
+    Error.captureStackTrace(this, this.constructor);
+    Object.setPrototypeOf(this, NotFoundError.prototype);
+    this.code = "NOT_FOUND";
+  }
+}

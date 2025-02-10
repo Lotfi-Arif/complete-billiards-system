@@ -10,7 +10,7 @@ jest.mock("better-sqlite3", () => {
 });
 
 // Mock services
-jest.mock("../UserService", () => ({
+jest.mock("./src/backend/database/UserService", () => ({
   UserService: jest.fn().mockImplementation(() => ({
     createUser: jest.fn(),
     verifyUser: jest.fn(),
