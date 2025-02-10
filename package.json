@@ -5,13 +5,15 @@
   "scripts": {
     "start": "electron .",
     "dev": "tsc && concurrently \"tsc -w\" \"electron .\"",
-    "build": "tsc && electron-builder",
     "test": "jest",
+    "build": "tsc -p electron.tsconfig.json && tsc -p renderer.tsconfig.json",
+    "watch": "tsc -p electron.tsconfig.json -w",
+    "lint": "eslint -c .eslintrc.js './src/**/*.{ts,tsx}'",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
     "test:unit": "jest tests/unit",
     "test:integration": "jest tests/integration",
     "test:e2e": "jest tests/e2e",
     "test:coverage": "jest --coverage",
-    "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -27,6 +29,8 @@
     "zod": "^3.21.4"
   },
   "devDependencies": {
+    "@types/electron": "^1.6.10",
+    "electron-rebuild": "^3.2.0",
     "@jest/types": "^29.6.3",
     "@testing-library/jest-dom": "^6.6.3",
     "@types/bcryptjs": "^2.4.2",

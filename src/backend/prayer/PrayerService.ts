@@ -75,8 +75,8 @@ export class PrayerService {
     return nextDay;
   }
 
-  public isInPrayerTime(): boolean {
-    const now = new Date();
+  public isInPrayerTime(time?: Date): boolean {
+    const checkTime = time || new Date();
     const nextPrayer = this.getNextPrayer();
 
     // Check if we're within the prayer window
@@ -86,7 +86,7 @@ export class PrayerService {
     const prayerEnd = new Date(nextPrayer.time);
     prayerEnd.setMinutes(prayerEnd.getMinutes() + this.prayerWindowMinutes);
 
-    return now >= prayerStart && now <= prayerEnd;
+    return checkTime >= prayerStart && checkTime <= prayerEnd;
   }
 
   public cleanup(): void {

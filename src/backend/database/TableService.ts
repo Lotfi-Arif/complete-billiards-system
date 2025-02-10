@@ -24,12 +24,14 @@ export class TableService extends BaseService {
     this.prayerService = prayerService;
   }
 
-  async createTable(): Promise<number> {
+  async createTable(
+    initialStatus: PoolTable["status"] = "available"
+  ): Promise<number> {
     try {
       return this.db.transaction(() => {
         const result = this.prepareStatement<[string], TableRecord>(
           "INSERT INTO pool_tables (status, last_maintained) VALUES (?, CURRENT_TIMESTAMP)"
-        ).run("available");
+        ).run(initialStatus);
 
         const tableId = Number(result.lastInsertRowid);
 
@@ -53,9 +55,8 @@ export class TableService extends BaseService {
   ): Promise<void> {
     try {
       await this.db.transaction(async () => {
-        // Check if we're trying to make the table available during prayer time
+        // Check prayer time restrictions for making tables available
         if (status === "available" && this.prayerService?.isInPrayerTime()) {
-          // Only managers can make tables available during prayer time
           const isManager = await this.isUserManager(staffId);
           if (!isManager) {
             throw new ValidationError(
@@ -100,18 +101,7 @@ export class TableService extends BaseService {
       `);
 
       const records = stmt.all();
-      return records.map((record) => ({
-        id: record.id,
-        status: record.status,
-        currentSessionId: record.current_session_id || undefined,
-        lastMaintained: record.last_maintained
-          ? new Date(record.last_maintained)
-          : new Date(),
-        staffName: record.staff_name,
-        sessionStartTime: record.session_start_time
-          ? new Date(record.session_start_time)
-          : undefined,
-      }));
+      return records.map(this.mapTableRecord);
     } catch (error) {
       throw new DatabaseError("Failed to get tables", { error });
     }
@@ -133,18 +123,7 @@ export class TableService extends BaseService {
       const record = stmt.get(tableId);
       if (!record) return null;
 
-      return {
-        id: record.id,
-        status: record.status,
-        currentSessionId: record.current_session_id || undefined,
-        lastMaintained: record.last_maintained
-          ? new Date(record.last_maintained)
-          : new Date(),
-        staffName: record.staff_name,
-        sessionStartTime: record.session_start_time
-          ? new Date(record.session_start_time)
-          : undefined,
-      };
+      return this.mapTableRecord(record);
     } catch (error) {
       throw new DatabaseError("Failed to get table", { error });
     }
@@ -208,13 +187,10 @@ export class TableService extends BaseService {
   ): Promise<TableMetrics> {
     try {
       return this.db.transaction(() => {
+        // Get usage metrics
         const usage = this.prepareStatement<
           [number, string, string],
-          {
-            total_hours: number;
-            revenue: number;
-            avg_duration: number;
-          }
+          { total_hours: number; revenue: number; avg_duration: number }
         >(
           `
           SELECT 
@@ -228,6 +204,7 @@ export class TableService extends BaseService {
         `
         ).get(tableId, startDate.toISOString(), endDate.toISOString());
 
+        // Get maintenance count
         const maintenance = this.prepareStatement<
           [number, string, string],
           { count: number }
@@ -240,13 +217,14 @@ export class TableService extends BaseService {
         `
         ).get(tableId, startDate.toISOString(), endDate.toISOString());
 
+        // Get popular time slots
         const timeSlots = this.prepareStatement<
           [number, string, string],
           { hour: number; count: number }
         >(
           `
           SELECT 
-            strftime('%H', start_time) as hour,
+            CAST(strftime('%H', start_time) AS INTEGER) as hour,
             COUNT(*) as count
           FROM sessions
           WHERE table_id = ?
@@ -273,23 +251,42 @@ export class TableService extends BaseService {
     }
   }
 
+  async syncTableStatesWithArduino(): Promise<void> {
+    if (!this.arduino) return;
+
+    try {
+      const tables = await this.getAllTables();
+      await Promise.all(
+        tables.map((table) =>
+          this.arduino!.toggleTable(table.id, table.status === "occupied")
+        )
+      );
+    } catch (error) {
+      throw new DatabaseError("Failed to sync table states with hardware", {
+        error,
+      });
+    }
+  }
+
   private async isUserManager(userId: number): Promise<boolean> {
     const result = this.prepareStatement<[number], { role: string }>(
-      `
-      SELECT role FROM users WHERE id = ?
-    `
+      "SELECT role FROM users WHERE id = ?"
     ).get(userId);
     return result?.role === "manager";
   }
 
-  async syncTableStatesWithArduino(): Promise<void> {
-    if (!this.arduino) return;
-
-    const tables = await this.getAllTables();
-    await Promise.all(
-      tables.map((table) =>
-        this.arduino!.toggleTable(table.id, table.status === "occupied")
-      )
-    );
+  private mapTableRecord(record: TableRecord): PoolTable {
+    return {
+      id: record.id,
+      status: record.status,
+      currentSessionId: record.current_session_id || undefined,
+      lastMaintained: record.last_maintained
+        ? new Date(record.last_maintained)
+        : new Date(),
+      staffName: record.staff_name,
+      sessionStartTime: record.session_start_time
+        ? new Date(record.session_start_time)
+        : undefined,
+    };
   }
 }

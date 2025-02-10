@@ -33,7 +33,9 @@ export interface SessionRecord extends DbRecord {
 export interface ReservationRecord extends DbRecord {
   table_id: number;
   customer_id: number;
+  customer_name?: string;
   staff_id: number;
+  staff_name?: string;
   reservation_time: string;
   status: Reservation["status"];
 }

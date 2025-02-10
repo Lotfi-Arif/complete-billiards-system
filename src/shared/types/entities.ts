@@ -20,7 +20,9 @@ export interface Session {
   id: number;
   tableId: number;
   staffId: number;
+  staffName?: string;
   customerId?: number;
+  customerName?: string;
   startTime: Date;
   endTime?: Date;
   duration?: number;
@@ -32,7 +34,9 @@ export interface Reservation {
   id: number;
   tableId: number;
   customerId: number;
+  customerName?: string;
   staffId: number;
+  staffName?: string;
   reservationTime: Date;
   status: "pending" | "confirmed" | "cancelled";
 }
