@@ -1,272 +1,247 @@
-import Database from "better-sqlite3";
+// src/backend/database/SessionService.ts
+import { Database } from "better-sqlite3";
 import { BaseService } from "./BaseService";
-import { Session } from "../../shared/types/entities";
-import { SessionRecord } from "../../shared/types/database";
-import { DatabaseError, ValidationError } from "../../shared/types/errors";
-import { PrayerService } from "../prayer/PrayerService";
+import {
+  Session,
+  SessionStatus,
+  CreateSessionDTO,
+  EndSessionDTO,
+} from "@/shared/types/Session";
+import {
+  DatabaseError,
+  NotFoundError,
+  BusinessError,
+} from "@/shared/types/errors";
+import { TableService } from "./TableService";
+import { TableStatus } from "@/shared/types/Table";
 
 export class SessionService extends BaseService {
-  private readonly HOURLY_RATE = 30; // $30 per hour
-  private readonly MIN_SESSION_DURATION = 30; // 30 minutes
-  private prayerService?: PrayerService;
+  private tableService: TableService;
 
-  constructor(db: Database.Database, prayerService?: PrayerService) {
+  constructor(db: Database) {
     super(db);
-    this.prayerService = prayerService;
+    this.tableService = new TableService(db);
+    this.initializeTable();
   }
 
-  async startSession(
-    tableId: number,
-    staffId: number,
-    customerId?: number
-  ): Promise<number> {
+  private initializeTable(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tableId INTEGER NOT NULL,
+        customerId INTEGER,
+        startTime DATETIME NOT NULL,
+        endTime DATETIME,
+        duration INTEGER,
+        cost DECIMAL(10,2),
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (tableId) REFERENCES tables(id)
+      )
+    `);
+  }
+
+  async startSession(data: CreateSessionDTO): Promise<Session> {
     try {
-      return this.db.transaction(() => {
-        // Check if table exists and is available
-        const tableStatus = this.prepareStatement<[number], { status: string }>(
-          "SELECT status FROM pool_tables WHERE id = ?"
-        ).get(tableId);
+      // First check if table exists
+      const table = await this.tableService.getTableById(data.tableId);
 
-        if (!tableStatus) {
-          throw new ValidationError("Table not found");
+      // if table exists, check if it's available
+      if (!table) {
+        throw new BusinessError(
+          `Table ${data.tableId} does not exist or is not available`
+        );
+      }
+      // Only check availability if starting a session right now
+      const startTime = data.startTime || new Date();
+      if (!data.startTime) {
+        // If no specific start time provided, check availability
+        if (!(await this.tableService.isTableAvailable(data.tableId))) {
+          throw new BusinessError(`Table ${data.tableId} is not available`);
+        }
+      }
+
+      return this.transaction(() => {
+        // Update table status first (only if starting now)
+        if (!data.startTime) {
+          this.tableService.updateTableStatus(data.tableId, {
+            status: TableStatus.IN_USE,
+          });
         }
 
-        if (tableStatus.status !== "available") {
-          throw new ValidationError("Table is not available");
-        }
-
-        // Check prayer time restrictions
-        if (this.prayerService?.isInPrayerTime()) {
-          throw new ValidationError("Cannot start session during prayer time");
-        }
-
-        // Start new session
-        const result = this.prepareStatement<
-          [number, number, number | null],
-          SessionRecord
-        >(
-          `INSERT INTO sessions (
-            table_id, 
-            staff_id, 
-            customer_id, 
-            start_time,
+        // Then create session
+        const stmt = this.db.prepare(`
+          INSERT INTO sessions (
+            tableId, 
+            customerId, 
+            startTime, 
             status
-          ) VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'active')`
-        ).run(tableId, staffId, customerId || null);
+          ) VALUES (?, ?, ?, ?)
+        `);
 
-        const sessionId = Number(result.lastInsertRowid);
+        const result = stmt.run(
+          data.tableId,
+          data.customerId || null,
+          startTime.toISOString(),
+          SessionStatus.ACTIVE
+        );
 
-        // Update table status and link session
-        this.prepareStatement<[number, number], void>(
-          `UPDATE pool_tables 
-           SET status = 'occupied', current_session_id = ? 
-           WHERE id = ?`
-        ).run(sessionId, tableId);
+        if (!result.lastInsertRowid) {
+          throw new DatabaseError("Failed to create session");
+        }
 
-        this.logActivity("session", sessionId, "started", staffId, {
-          tableId,
-          customerId,
-        });
-
-        return sessionId;
-      })();
+        return this.getSessionById(Number(result.lastInsertRowid));
+      });
     } catch (error) {
+      if (error instanceof NotFoundError || error instanceof BusinessError) {
+        throw error;
+      }
       throw new DatabaseError("Failed to start session", { error });
     }
   }
 
-  async endSession(sessionId: number, staffId: number): Promise<void> {
+  async endSession(id: number, data: EndSessionDTO = {}): Promise<Session> {
     try {
-      await this.db.transaction(() => {
-        // Get session details
-        const session = this.prepareStatement<[number], SessionRecord>(
-          `SELECT s.*, t.id as table_id 
-           FROM sessions s
-           JOIN pool_tables t ON s.table_id = t.id
-           WHERE s.id = ?`
-        ).get(sessionId);
+      const session = await this.getSessionById(id);
 
-        if (!session) {
-          throw new ValidationError("Session not found");
-        }
+      if (session.status !== SessionStatus.ACTIVE) {
+        throw new BusinessError(`Session ${id} is not active`);
+      }
 
-        if (session.status !== "active") {
-          throw new ValidationError("Session is not active");
-        }
+      const endTime = data.endTime || new Date();
+      const duration = Math.ceil(
+        (endTime.getTime() - session.startTime.getTime()) / (1000 * 60)
+      );
 
-        // Calculate duration and amount
-        const startTime = new Date(session.start_time);
-        const endTime = new Date();
-        const durationMinutes = Math.ceil(
-          (endTime.getTime() - startTime.getTime()) / (1000 * 60)
+      // Get table to calculate cost
+      const table = await this.tableService.getTableById(session.tableId);
+      const cost = (duration / 60) * table.hourlyRate;
+
+      return this.transaction(() => {
+        // Update table status first
+        this.tableService.updateTableStatus(session.tableId, {
+          status: TableStatus.AVAILABLE,
+        });
+
+        // Then update session
+        const stmt = this.db.prepare(`
+          UPDATE sessions 
+          SET endTime = ?,
+              duration = ?,
+              cost = ?,
+              status = ?,
+              updatedAt = CURRENT_TIMESTAMP
+          WHERE id = ? AND status = ?
+        `);
+
+        const result = stmt.run(
+          endTime.toISOString(),
+          duration,
+          cost,
+          data.status || SessionStatus.COMPLETED,
+          id,
+          SessionStatus.ACTIVE
         );
 
-        if (durationMinutes < this.MIN_SESSION_DURATION) {
-          throw new ValidationError(
-            `Session must be at least ${this.MIN_SESSION_DURATION} minutes`
+        if (result.changes === 0) {
+          throw new NotFoundError(
+            `Session with id ${id} not found or not active`
           );
         }
 
-        const amount = this.calculateSessionAmount(durationMinutes);
-
-        // Update session
-        this.prepareStatement<[string, number, number, number], void>(
-          `UPDATE sessions 
-           SET status = ?, end_time = CURRENT_TIMESTAMP, duration = ?, amount = ?
-           WHERE id = ?`
-        ).run("completed", durationMinutes, amount, sessionId);
-
-        // Update table status
-        this.prepareStatement<[number], void>(
-          `UPDATE pool_tables 
-           SET status = 'available', current_session_id = NULL 
-           WHERE id = ?`
-        ).run(session.table_id);
-
-        this.logActivity("session", sessionId, "completed", staffId, {
-          duration: durationMinutes,
-          amount,
-        });
-      })();
+        return this.getSessionById(id);
+      });
     } catch (error) {
+      if (error instanceof NotFoundError || error instanceof BusinessError) {
+        throw error;
+      }
       throw new DatabaseError("Failed to end session", { error });
     }
   }
 
-  async getActiveSession(tableId: number): Promise<Session | null> {
-    try {
-      const record = this.prepareStatement<
-        [number],
-        SessionRecord & { staff_name?: string; customer_name?: string }
-      >(
-        `SELECT 
-          s.*,
-          u.username as staff_name,
-          c.username as customer_name
-         FROM sessions s
-         JOIN users u ON s.staff_id = u.id
-         LEFT JOIN users c ON s.customer_id = c.id
-         WHERE s.table_id = ? AND s.status = 'active'`
-      ).get(tableId);
+  async getSessionById(id: number): Promise<Session> {
+    const stmt = this.db.prepare("SELECT * FROM sessions WHERE id = ?");
+    const session = stmt.get(id) as Session | undefined;
 
-      if (!record) return null;
-
-      return this.mapSessionRecord(record);
-    } catch (error) {
-      throw new DatabaseError("Failed to get active session", { error });
+    if (!session) {
+      throw new NotFoundError(`Session with id ${id} not found`);
     }
-  }
 
-  async getSessionById(sessionId: number): Promise<Session | null> {
-    try {
-      const record = this.prepareStatement<
-        [number],
-        SessionRecord & { staff_name?: string; customer_name?: string }
-      >(
-        `SELECT 
-          s.*,
-          u.username as staff_name,
-          c.username as customer_name
-         FROM sessions s
-         JOIN users u ON s.staff_id = u.id
-         LEFT JOIN users c ON s.customer_id = c.id
-         WHERE s.id = ?`
-      ).get(sessionId);
-
-      if (!record) return null;
-
-      return this.mapSessionRecord(record);
-    } catch (error) {
-      throw new DatabaseError("Failed to get session", { error });
-    }
-  }
-
-  async getSessionsByCustomer(
-    customerId: number,
-    limit: number = 10
-  ): Promise<Session[]> {
-    try {
-      const records = this.prepareStatement<
-        [number, number],
-        SessionRecord & { staff_name?: string; customer_name?: string }
-      >(
-        `SELECT 
-          s.*,
-          u.username as staff_name,
-          c.username as customer_name
-         FROM sessions s
-         JOIN users u ON s.staff_id = u.id
-         LEFT JOIN users c ON s.customer_id = c.id
-         WHERE s.customer_id = ?
-         ORDER BY s.start_time DESC
-         LIMIT ?`
-      ).all(customerId, limit);
-
-      return records.map(this.mapSessionRecord);
-    } catch (error) {
-      throw new DatabaseError("Failed to get customer sessions", { error });
-    }
-  }
-
-  async cancelSession(
-    sessionId: number,
-    staffId: number,
-    reason?: string
-  ): Promise<void> {
-    try {
-      await this.db.transaction(() => {
-        const session = this.prepareStatement<[number], SessionRecord>(
-          "SELECT * FROM sessions WHERE id = ?"
-        ).get(sessionId);
-
-        if (!session) {
-          throw new ValidationError("Session not found");
-        }
-
-        if (session.status !== "active") {
-          throw new ValidationError("Session is not active");
-        }
-
-        // Update session status
-        this.prepareStatement<[number], void>(
-          "UPDATE sessions SET status = 'cancelled', end_time = CURRENT_TIMESTAMP WHERE id = ?"
-        ).run(sessionId);
-
-        // Update table status
-        this.prepareStatement<[number], void>(
-          "UPDATE pool_tables SET status = 'available', current_session_id = NULL WHERE id = ?"
-        ).run(session.table_id);
-
-        this.logActivity("session", sessionId, "cancelled", staffId, {
-          reason,
-        });
-      })();
-    } catch (error) {
-      throw new DatabaseError("Failed to cancel session", { error });
-    }
-  }
-
-  private calculateSessionAmount(durationMinutes: number): number {
-    // Round up to nearest 30 minutes
-    const billableHours = Math.ceil(durationMinutes / 30) * 0.5;
-    return billableHours * this.HOURLY_RATE;
-  }
-
-  private mapSessionRecord(
-    record: SessionRecord & { staff_name?: string; customer_name?: string }
-  ): Session {
     return {
-      id: record.id,
-      tableId: record.table_id,
-      staffId: record.staff_id,
-      customerId: record.customer_id || undefined,
-      startTime: new Date(record.start_time),
-      endTime: record.end_time ? new Date(record.end_time) : undefined,
-      duration: record.duration || undefined,
-      amount: record.amount || undefined,
-      status: record.status,
-      staffName: record.staff_name,
-      customerName: record.customer_name,
+      ...session,
+      startTime: new Date(session.startTime),
+      endTime: session.endTime ? new Date(session.endTime) : null,
+      createdAt: new Date(session.createdAt),
+      updatedAt: new Date(session.updatedAt),
     };
+  }
+
+  async getActiveSessions(): Promise<Session[]> {
+    const stmt = this.db.prepare("SELECT * FROM sessions WHERE status = ?");
+    const sessions = stmt.all(SessionStatus.ACTIVE) as Session[];
+
+    return sessions.map((session) => ({
+      ...session,
+      startTime: new Date(session.startTime),
+      endTime: session.endTime ? new Date(session.endTime) : null,
+      createdAt: new Date(session.createdAt),
+      updatedAt: new Date(session.updatedAt),
+    }));
+  }
+
+  async getTableSessions(tableId: number): Promise<Session[]> {
+    try {
+      // Verify table exists first
+      await this.tableService.getTableById(tableId);
+
+      const stmt = this.db.prepare("SELECT * FROM sessions WHERE tableId = ?");
+      const sessions = stmt.all(tableId) as Session[];
+
+      return sessions.map((session) => ({
+        ...session,
+        startTime: new Date(session.startTime),
+        endTime: session.endTime ? new Date(session.endTime) : null,
+        createdAt: new Date(session.createdAt),
+        updatedAt: new Date(session.updatedAt),
+      }));
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  async getCustomerSessions(customerId: number): Promise<Session[]> {
+    const stmt = this.db.prepare("SELECT * FROM sessions WHERE customerId = ?");
+    const sessions = stmt.all(customerId) as Session[];
+
+    return sessions.map((session) => ({
+      ...session,
+      startTime: new Date(session.startTime),
+      endTime: session.endTime ? new Date(session.endTime) : null,
+      createdAt: new Date(session.createdAt),
+      updatedAt: new Date(session.updatedAt),
+    }));
+  }
+
+  async cancelSession(id: number): Promise<Session> {
+    return this.endSession(id, { status: SessionStatus.CANCELLED });
+  }
+
+  async calculateSessionCost(session: Session): Promise<number> {
+    if (!session.endTime) {
+      throw new BusinessError("Cannot calculate cost for active session");
+    }
+
+    const table = await this.tableService.getTableById(session.tableId);
+    const duration =
+      session.duration ||
+      Math.ceil(
+        (session.endTime.getTime() - session.startTime.getTime()) / (1000 * 60)
+      );
+
+    return (duration / 60) * table.hourlyRate;
   }
 }

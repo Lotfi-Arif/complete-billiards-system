@@ -37,3 +37,12 @@ export class NotFoundError extends ApplicationError {
     this.code = "NOT_FOUND";
   }
 }
+
+export class BusinessError extends ApplicationError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "BUSINESS_ERROR", details);
+    this.name = this.constructor.name;
+    Error.captureStackTrace(this, this.constructor);
+    Object.setPrototypeOf(this, BusinessError.prototype);
+  }
+}
