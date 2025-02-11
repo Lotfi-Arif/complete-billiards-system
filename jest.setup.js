@@ -45,3 +45,9 @@ jest.mock("../../arduino/ArduinoService", () => ({
 jest.mock("../../prayer/PrayerService", () => ({
   PrayerService: jest.fn(),
 }));
+
+jest.mock("../../shared/logger", () => ({
+  error: jest.fn(),
+  info: jest.fn(),
+  warn: jest.fn(),
+}));

@@ -46,3 +46,12 @@ export class BusinessError extends ApplicationError {
     Object.setPrototypeOf(this, BusinessError.prototype);
   }
 }
+
+export class AuthenticationError extends ApplicationError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "AUTHENTICATION_ERROR", details);
+    this.name = this.constructor.name;
+    Error.captureStackTrace(this, this.constructor);
+    Object.setPrototypeOf(this, AuthenticationError.prototype);
+  }
+}

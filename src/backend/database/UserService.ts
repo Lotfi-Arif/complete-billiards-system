@@ -1,215 +1,222 @@
+import { Database } from "better-sqlite3";
 import bcrypt from "bcryptjs";
 import { BaseService } from "./BaseService";
-import { User, UserRole } from "../../shared/types/entities";
-import { UserRecord } from "../../shared/types/database";
-import { DatabaseError, ValidationError } from "../../shared/types/errors";
-import { z } from "zod";
-import Database from "better-sqlite3";
-import { UserSchema } from "@/shared/types/validation/schemas";
+import {
+  User,
+  UserRole,
+  CreateUserDTO,
+  UpdateUserDTO,
+  UserCredentials,
+} from "@/shared/types/User";
+import {
+  DatabaseError,
+  NotFoundError,
+  AuthenticationError,
+} from "@/shared/types/errors";
 
 export class UserService extends BaseService {
-  private readonly SALT_ROUNDS = 10;
-
-  constructor(db: Database.Database) {
+  constructor(db: Database) {
     super(db);
+    this.initializeTable();
   }
 
-  async createUser(
-    username: string,
+  private initializeTable(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        passwordHash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'CUSTOMER',
+        isActive BOOLEAN NOT NULL DEFAULT 1,
+        lastLogin DATETIME,
+        createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+  }
+
+  private async hashPassword(password: string): Promise<string> {
+    const saltRounds = 10;
+    return bcrypt.hash(password, saltRounds);
+  }
+
+  private async verifyPassword(
     password: string,
-    role: UserRole
-  ): Promise<number> {
+    hash: string
+  ): Promise<boolean> {
+    return bcrypt.compare(password, hash);
+  }
+
+  async createUser(data: CreateUserDTO): Promise<User> {
     try {
-      // Validate input data
-      UserSchema.parse({ username, password, role });
+      const passwordHash = await this.hashPassword(data.password);
 
-      return this.db.transaction(async () => {
-        // Check if username already exists
-        const existingUser = this.prepareStatement<[string], { id: number }>(
-          "SELECT id FROM users WHERE username = ?"
-        ).get(username);
-
-        if (existingUser) {
-          throw new ValidationError("Username already exists");
-        }
-
-        // Hash password
-        const hashedPassword = await bcrypt.hash(password, this.SALT_ROUNDS);
-
-        // Create user
-        const result = this.prepareStatement<
-          [string, string, string],
-          UserRecord
-        >("INSERT INTO users (username, password, role) VALUES (?, ?, ?)").run(
+      const stmt = this.db.prepare(`
+        INSERT INTO users (
           username,
-          hashedPassword,
+          email,
+          passwordHash,
           role
+        ) VALUES (?, ?, ?, ?)
+      `);
+
+      const result = this.transaction(() => {
+        return stmt.run(
+          data.username,
+          data.email,
+          passwordHash,
+          data.role || UserRole.CUSTOMER
         );
+      });
 
-        const userId = Number(result.lastInsertRowid);
+      if (!result.lastInsertRowid) {
+        throw new DatabaseError("Failed to create user");
+      }
 
-        this.logActivity("user", userId, "created", userId);
-
-        return userId;
-      })();
+      return this.getUserById(Number(result.lastInsertRowid));
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        throw new ValidationError("Invalid user data", { error: error.errors });
+      if (error.code === "SQLITE_CONSTRAINT") {
+        throw new DatabaseError("Username or email already exists");
       }
       throw new DatabaseError("Failed to create user", { error });
     }
   }
 
-  async verifyUser(username: string, password: string): Promise<User | null> {
-    try {
-      const stmt = this.prepareStatement<[string], UserRecord>(
-        "SELECT * FROM users WHERE username = ?"
-      );
+  async authenticateUser(credentials: UserCredentials): Promise<User> {
+    const stmt = this.db.prepare(`
+      SELECT * FROM users 
+      WHERE username = ? AND isActive = 1
+    `);
 
-      const user = stmt.get(username);
-      if (!user) return null;
+    const user = stmt.get(credentials.username) as User | undefined;
 
-      const isValid = await bcrypt.compare(password, user.password);
-      if (!isValid) return null;
-
-      return this.mapUserRecord(user);
-    } catch (error) {
-      throw new DatabaseError("Failed to verify user", { error });
+    if (!user) {
+      throw new AuthenticationError("Invalid credentials");
     }
+
+    const isValid = await this.verifyPassword(
+      credentials.password,
+      user.passwordHash
+    );
+    if (!isValid) {
+      throw new AuthenticationError("Invalid credentials");
+    }
+
+    // Update last login
+    await this.updateLastLogin(user.id);
+
+    return this.formatUser(user);
   }
 
-  async updateUserRole(userId: number, newRole: User["role"]): Promise<void> {
-    try {
-      // Validate role
-      UserSchema.shape.role.parse(newRole);
+  private async updateLastLogin(id: number): Promise<void> {
+    const stmt = this.db.prepare(`
+      UPDATE users 
+      SET lastLogin = CURRENT_TIMESTAMP,
+          updatedAt = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `);
 
-      const result = this.prepareStatement<[string, number], void>(
-        "UPDATE users SET role = ? WHERE id = ?"
-      ).run(newRole, userId);
+    this.transaction(() => {
+      return stmt.run(id);
+    });
+  }
+
+  async getUserById(id: number): Promise<User> {
+    const stmt = this.db.prepare("SELECT * FROM users WHERE id = ?");
+    const user = stmt.get(id) as User | undefined;
+
+    if (!user) {
+      throw new NotFoundError(`User with id ${id} not found`);
+    }
+
+    return this.formatUser(user);
+  }
+
+  async getUserByUsername(username: string): Promise<User> {
+    const stmt = this.db.prepare("SELECT * FROM users WHERE username = ?");
+    const user = stmt.get(username) as User | undefined;
+
+    if (!user) {
+      throw new NotFoundError(`User ${username} not found`);
+    }
+
+    return this.formatUser(user);
+  }
+
+  async updateUser(id: number, data: UpdateUserDTO): Promise<User> {
+    try {
+      const updates: string[] = [];
+      const values: any[] = [];
+
+      if (data.email) {
+        updates.push("email = ?");
+        values.push(data.email);
+      }
+      if (data.password) {
+        updates.push("passwordHash = ?");
+        values.push(await this.hashPassword(data.password));
+      }
+      if (data.role) {
+        updates.push("role = ?");
+        values.push(data.role);
+      }
+      if (typeof data.isActive === "boolean") {
+        updates.push("isActive = ?");
+        values.push(data.isActive);
+      }
+
+      updates.push("updatedAt = CURRENT_TIMESTAMP");
+
+      const stmt = this.db.prepare(`
+        UPDATE users 
+        SET ${updates.join(", ")}
+        WHERE id = ?
+      `);
+
+      const result = this.transaction(() => {
+        return stmt.run(...values, id);
+      });
 
       if (result.changes === 0) {
-        throw new ValidationError("User not found");
+        throw new NotFoundError(`User with id ${id} not found`);
       }
 
-      this.logActivity("user", userId, "role_updated", userId, { newRole });
+      return this.getUserById(id);
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        throw new ValidationError("Invalid role", { error: error.errors });
+      if (error instanceof NotFoundError) {
+        throw error;
       }
-      throw new DatabaseError("Failed to update user role", { error });
+      throw new DatabaseError("Failed to update user", { error });
     }
   }
 
-  async updatePassword(
-    userId: number,
-    currentPassword: string,
-    newPassword: string
-  ): Promise<void> {
+  async deactivateUser(id: number): Promise<void> {
+    await this.updateUser(id, { isActive: false });
+  }
+
+  async getActiveUsers(): Promise<User[]> {
+    const stmt = this.db.prepare("SELECT * FROM users WHERE isActive = 1");
+    const users = stmt.all() as User[];
+
+    return users.map((user) => this.formatUser(user));
+  }
+
+  async isUserManager(id: number): Promise<boolean> {
     try {
-      // Validate new password
-      UserSchema.shape.password.parse(newPassword);
-
-      return this.db.transaction(async () => {
-        // Get current user data
-        const user = await this.getUserById(userId);
-        if (!user) {
-          throw new ValidationError("User not found");
-        }
-
-        // Verify current password
-        const currentUser = await this.getUserWithPassword(userId);
-        if (!currentUser) {
-          throw new ValidationError("User not found");
-        }
-
-        const isValid = await bcrypt.compare(
-          currentPassword,
-          currentUser.password
-        );
-        if (!isValid) {
-          throw new ValidationError("Current password is incorrect");
-        }
-
-        // Hash and update new password
-        const hashedPassword = await bcrypt.hash(newPassword, this.SALT_ROUNDS);
-
-        const result = this.prepareStatement<[string, number], void>(
-          "UPDATE users SET password = ? WHERE id = ?"
-        ).run(hashedPassword, userId);
-
-        if (result.changes === 0) {
-          throw new ValidationError("Failed to update password");
-        }
-
-        this.logActivity("user", userId, "password_updated", userId);
-      })();
+      const user = await this.getUserById(id);
+      return [UserRole.ADMIN, UserRole.MANAGER].includes(user.role);
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        throw new ValidationError("Invalid password format", {
-          error: error.errors,
-        });
-      }
-      throw new DatabaseError("Failed to update password", { error });
+      return false;
     }
   }
 
-  async getUserById(userId: number): Promise<User | null> {
-    try {
-      const user = this.prepareStatement<[number], UserRecord>(
-        "SELECT * FROM users WHERE id = ?"
-      ).get(userId);
-
-      if (!user) return null;
-
-      return this.mapUserRecord(user);
-    } catch (error) {
-      throw new DatabaseError("Failed to get user", { error });
-    }
-  }
-
-  async getUsers(role?: User["role"]): Promise<User[]> {
-    try {
-      let stmt: Database.Statement<any[], UserRecord>;
-
-      if (role) {
-        stmt = this.prepareStatement<[string], UserRecord>(
-          "SELECT * FROM users WHERE role = ? ORDER BY username"
-        );
-        return stmt.all(role).map(this.mapUserRecord);
-      } else {
-        stmt = this.prepareStatement<[], UserRecord>(
-          "SELECT * FROM users ORDER BY username"
-        );
-        return stmt.all().map(this.mapUserRecord);
-      }
-    } catch (error) {
-      throw new DatabaseError("Failed to get users", { error });
-    }
-  }
-
-  async isUserManager(userId: number): Promise<boolean> {
-    try {
-      const user = await this.getUserById(userId);
-      return user?.role === "manager";
-    } catch (error) {
-      throw new DatabaseError("Failed to check user role", { error });
-    }
-  }
-
-  private async getUserWithPassword(
-    userId: number
-  ): Promise<UserRecord | undefined> {
-    return this.prepareStatement<[number], UserRecord>(
-      "SELECT * FROM users WHERE id = ?"
-    ).get(userId);
-  }
-
-  private mapUserRecord(record: UserRecord): User {
+  private formatUser(user: User): User {
     return {
-      id: record.id,
-      username: record.username,
-      role: record.role,
-      createdAt: new Date(record.created_at),
+      ...user,
+      lastLogin: user.lastLogin ? new Date(user.lastLogin) : undefined,
+      createdAt: new Date(user.createdAt),
+      updatedAt: new Date(user.updatedAt),
     };
   }
 }

@@ -1,3 +1,5 @@
+// src/main/services/TableService.ts
+
 import { Database } from "better-sqlite3";
 import {
   Table,
@@ -7,36 +9,63 @@ import {
 } from "@/shared/types/Table";
 import { DatabaseError, NotFoundError } from "@/shared/types/errors";
 import { BaseService } from "./BaseService";
+import Logger from "@/shared/logger"; // Adjust the import path as needed
 
+/**
+ * TableService handles all operations related to pool tables including creation,
+ * retrieval, updates, and deletion (deactivation). It extends BaseService to leverage
+ * common database utilities such as transactions and logging.
+ */
 export class TableService extends BaseService {
   constructor(db: Database) {
     super(db);
+    Logger.info("Initializing TableService");
     this.initializeTable();
   }
 
+  /**
+   * Creates the tables schema if it does not exist.
+   * This method is called once during service initialization.
+   */
   private initializeTable(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS tables (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tableNumber INTEGER UNIQUE NOT NULL,
-        status TEXT NOT NULL DEFAULT 'AVAILABLE',
-        lastMaintenance DATETIME,
-        condition TEXT,
-        hourlyRate DECIMAL(10,2) NOT NULL,
-        isActive BOOLEAN NOT NULL DEFAULT 1,
-        createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    try {
+      Logger.info("Initializing table schema if not exists");
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS tables (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tableNumber INTEGER UNIQUE NOT NULL,
+          status TEXT NOT NULL DEFAULT 'AVAILABLE',
+          lastMaintenance DATETIME,
+          condition TEXT,
+          hourlyRate DECIMAL(10,2) NOT NULL,
+          isActive BOOLEAN NOT NULL DEFAULT 1,
+          createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      Logger.info("Table schema initialized successfully");
+    } catch (error) {
+      Logger.error("Failed to initialize table schema: " + error);
+      throw new DatabaseError("Failed to initialize table schema", { error });
+    }
   }
 
+  /**
+   * Creates a new pool table record.
+   *
+   * @param data - The details required to create a table.
+   * @returns The newly created Table record.
+   * @throws DatabaseError if the table creation fails.
+   */
   async createTable(data: CreateTableDTO): Promise<Table> {
     try {
+      Logger.info(`Creating table with tableNumber: ${data.tableNumber}`);
       const stmt = this.db.prepare(`
         INSERT INTO tables (tableNumber, hourlyRate, condition)
         VALUES (?, ?, ?)
       `);
 
+      // Wrap the insert operation in a transaction.
       const result = this.transaction(() => {
         return stmt.run(
           data.tableNumber,
@@ -46,50 +75,95 @@ export class TableService extends BaseService {
       });
 
       if (!result.lastInsertRowid) {
+        Logger.error("No lastInsertRowid returned after table insertion");
         throw new DatabaseError("Failed to create table");
       }
 
+      Logger.info(
+        `Table created successfully with id ${result.lastInsertRowid}`
+      );
       return this.getTableById(Number(result.lastInsertRowid));
     } catch (error) {
+      Logger.error(`Error in createTable: ${error}`);
       throw new DatabaseError("Failed to create table", { error });
     }
   }
 
+  /**
+   * Retrieves a table record by its ID.
+   *
+   * @param id - The unique identifier of the table.
+   * @returns The Table record.
+   * @throws NotFoundError if the table does not exist.
+   * @throws DatabaseError if the operation fails.
+   */
   async getTableById(id: number): Promise<Table> {
-    const stmt = this.db.prepare("SELECT * FROM tables WHERE id = ?");
-    const table = stmt.get(id) as Table | undefined;
+    try {
+      Logger.info(`Fetching table with id ${id}`);
+      const stmt = this.db.prepare("SELECT * FROM tables WHERE id = ?");
+      const table = stmt.get(id) as Table | undefined;
 
-    if (!table) {
-      throw new NotFoundError(`Table with id ${id} not found`);
+      if (!table) {
+        Logger.warn(`Table with id ${id} not found`);
+        throw new NotFoundError(`Table with id ${id} not found`);
+      }
+
+      Logger.info(`Table with id ${id} retrieved successfully`);
+      return {
+        ...table,
+        lastMaintenance: table.lastMaintenance
+          ? new Date(table.lastMaintenance)
+          : null,
+        createdAt: new Date(table.createdAt),
+        updatedAt: new Date(table.updatedAt),
+      };
+    } catch (error) {
+      Logger.error(`Error in getTableById: ${error}`);
+      if (error instanceof NotFoundError) throw error;
+      throw new DatabaseError("Failed to get table by id", { error });
     }
-
-    return {
-      ...table,
-      lastMaintenance: table.lastMaintenance
-        ? new Date(table.lastMaintenance)
-        : null,
-      createdAt: new Date(table.createdAt),
-      updatedAt: new Date(table.updatedAt),
-    };
   }
 
+  /**
+   * Retrieves all active tables.
+   *
+   * @returns An array of Table records.
+   * @throws DatabaseError if the operation fails.
+   */
   async getAllTables(): Promise<Table[]> {
-    const stmt = this.db.prepare("SELECT * FROM tables WHERE isActive = 1");
-    const tables = stmt.all() as Table[];
+    try {
+      Logger.info("Fetching all active tables");
+      const stmt = this.db.prepare("SELECT * FROM tables WHERE isActive = 1");
+      const tables = stmt.all() as Table[];
 
-    return tables.map((table) => ({
-      ...table,
-      lastMaintenance: table.lastMaintenance
-        ? new Date(table.lastMaintenance)
-        : null,
-      createdAt: new Date(table.createdAt),
-      updatedAt: new Date(table.updatedAt),
-    }));
+      Logger.info(`Retrieved ${tables.length} active table(s)`);
+      return tables.map((table) => ({
+        ...table,
+        lastMaintenance: table.lastMaintenance
+          ? new Date(table.lastMaintenance)
+          : null,
+        createdAt: new Date(table.createdAt),
+        updatedAt: new Date(table.updatedAt),
+      }));
+    } catch (error) {
+      Logger.error(`Error in getAllTables: ${error}`);
+      throw new DatabaseError("Failed to get all tables", { error });
+    }
   }
 
+  /**
+   * Updates a table's details.
+   *
+   * @param id - The unique identifier of the table to update.
+   * @param data - The updated table details.
+   * @returns The updated Table record.
+   * @throws NotFoundError if the table does not exist.
+   * @throws DatabaseError if the update operation fails.
+   */
   async updateTableStatus(id: number, data: UpdateTableDTO): Promise<Table> {
     try {
-      // First verify the table exists
+      Logger.info(`Updating table with id ${id}`);
+      // Verify the table exists before attempting an update.
       await this.getTableById(id);
 
       const updates: string[] = [];
@@ -113,40 +187,58 @@ export class TableService extends BaseService {
       }
       if (typeof data.isActive === "boolean") {
         updates.push("isActive = ?");
-        values.push(data.isActive ? 1 : 0); // Explicitly convert to SQLite boolean
+        values.push(data.isActive ? 1 : 0);
       }
 
+      // Always update the updatedAt field to reflect the modification time.
       updates.push("updatedAt = CURRENT_TIMESTAMP");
 
-      const stmt = this.db.prepare(`
+      const sql = `
         UPDATE tables 
         SET ${updates.join(", ")}
         WHERE id = ?
-      `);
+      `;
+      Logger.info(
+        `Executing update for table id ${id} with SQL: ${sql} and values: ${JSON.stringify(
+          values
+        )}`
+      );
+
+      const stmt = this.db.prepare(sql);
 
       const result = this.transaction(() => {
         return stmt.run(...values, id);
       });
 
       if (result.changes === 0) {
+        Logger.warn(`No changes made for table with id ${id}`);
         throw new NotFoundError(`Table with id ${id} not found`);
       }
 
-      return this.getTableById(id);
+      Logger.info(`Table with id ${id} updated successfully`);
+      return await this.getTableById(id);
     } catch (error) {
-      if (error instanceof NotFoundError) {
-        throw error;
-      }
+      Logger.error(`Error in updateTableStatus for table id ${id}: ${error}`);
+      if (error instanceof NotFoundError) throw error;
       throw new DatabaseError("Failed to update table", { error });
     }
   }
 
+  /**
+   * Deletes (deactivates) a table.
+   *
+   * @param id - The unique identifier of the table to delete.
+   * @throws NotFoundError if the table is not found or already deleted.
+   * @throws DatabaseError if the deletion operation fails.
+   */
   async deleteTable(id: number): Promise<void> {
     try {
-      // First check if table exists and is active
+      Logger.info(`Deleting (deactivating) table with id ${id}`);
+      // Verify that the table exists and is currently active.
       const table = await this.getTableById(id);
 
       if (!table.isActive) {
+        Logger.warn(`Table with id ${id} is already inactive`);
         throw new NotFoundError(`Table with id ${id} has already been deleted`);
       }
 
@@ -161,20 +253,40 @@ export class TableService extends BaseService {
       });
 
       if (result.changes === 0) {
+        Logger.warn(`No changes made during deletion for table with id ${id}`);
         throw new NotFoundError(
           `Table with id ${id} not found or already deleted`
         );
       }
+
+      Logger.info(`Table with id ${id} deactivated successfully`);
     } catch (error) {
-      if (error instanceof NotFoundError) {
-        throw error;
-      }
+      Logger.error(`Error in deleteTable for table id ${id}: ${error}`);
+      if (error instanceof NotFoundError) throw error;
       throw new DatabaseError("Failed to delete table", { error });
     }
   }
 
+  /**
+   * Checks whether a table is available (i.e., its status is AVAILABLE).
+   *
+   * @param id - The unique identifier of the table.
+   * @returns True if the table is available; otherwise, false.
+   * @throws DatabaseError if the operation fails.
+   */
   async isTableAvailable(id: number): Promise<boolean> {
-    const table = await this.getTableById(id);
-    return table.status === TableStatus.AVAILABLE;
+    try {
+      Logger.info(`Checking availability for table with id ${id}`);
+      const table = await this.getTableById(id);
+      const available = table.status === TableStatus.AVAILABLE;
+      Logger.info(
+        `Table with id ${id} is ${available ? "available" : "not available"}`
+      );
+      return available;
+    } catch (error) {
+      Logger.error(`Error in isTableAvailable for table id ${id}: ${error}`);
+      if (error instanceof NotFoundError) throw error;
+      throw new DatabaseError("Failed to check table availability", { error });
+    }
   }
 }
