@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { ReservationService } from "../ReservationService";
-import { PrayerService } from "../../prayer/PrayerService";
+import { PrayerService } from "../PrayerService";
 
 describe("ReservationService", () => {
   let reservationService: ReservationService;

@@ -4,7 +4,7 @@ import isDev from "electron-is-dev";
 import { registerIpcHandlers } from "./ipc/handlers";
 import { DatabaseService } from "../backend/database/DatabaseService";
 import { ArduinoService } from "../backend/arduino/ArduinoService";
-import { PrayerService } from "../backend/prayer/PrayerService";
+import { PrayerService } from "../backend/database/PrayerService";
 
 class MainProcess {
   private mainWindow: BrowserWindow | null = null;

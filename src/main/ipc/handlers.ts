@@ -1,7 +1,7 @@
 import { ipcMain } from "electron";
 import { DatabaseService } from "../../backend/database/DatabaseService";
 import { ArduinoService } from "../../backend/arduino/ArduinoService";
-import { PrayerService } from "../../backend/prayer/PrayerService";
+import { PrayerService } from "../../backend/database/PrayerService";
 import { IpcChannels } from "../../shared/types/ipc";
 import { ValidationError } from "../../shared/types/errors";
 import { PoolTable, UserRole } from "@/shared/types/entities";
