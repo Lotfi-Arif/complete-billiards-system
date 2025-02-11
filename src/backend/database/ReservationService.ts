@@ -85,8 +85,7 @@ export class ReservationService extends BaseService {
       }
 
       // Instantiate PrayerService and check for prayer time conflict
-      const prayerService = new PrayerService();
-      const prayerConflict = await prayerService.isDuringPrayerTimeInterval(
+      const prayerConflict = await this.prayerService.isDuringPrayerTimeInterval(
         new Date(data.startTime),
         new Date(data.endTime)
       );

@@ -1,8 +1,10 @@
 export enum TableStatus {
   AVAILABLE = "AVAILABLE",
   IN_USE = "IN_USE",
+  COOLDOWN = "COOLDOWN",
   MAINTENANCE = "MAINTENANCE",
   RESERVED = "RESERVED",
+  OFF = "OFF",
 }
 
 export interface Table {

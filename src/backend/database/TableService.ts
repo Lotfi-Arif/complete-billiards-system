@@ -160,7 +160,11 @@ export class TableService extends BaseService {
    * @throws NotFoundError if the table does not exist.
    * @throws DatabaseError if the update operation fails.
    */
-  async updateTableStatus(id: number, data: UpdateTableDTO): Promise<Table> {
+  async updateTableStatus(
+    id: number,
+    data: UpdateTableDTO,
+    performedBy?: number // optional parameter for the user ID performing the update
+  ): Promise<Table> {
     try {
       Logger.info(`Updating table with id ${id}`);
       // Verify the table exists before attempting an update.
@@ -213,6 +217,13 @@ export class TableService extends BaseService {
       if (result.changes === 0) {
         Logger.warn(`No changes made for table with id ${id}`);
         throw new NotFoundError(`Table with id ${id} not found`);
+      }
+
+      // If a performedBy value is provided, log the activity.
+      if (performedBy !== undefined) {
+        this.logActivity("PoolTable", id, "UPDATE_STATUS", performedBy, {
+          ...data,
+        });
       }
 
       Logger.info(`Table with id ${id} updated successfully`);
