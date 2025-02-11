@@ -1,5 +1,3 @@
-// src/main/services/TableService.ts
-
 import { Database } from "better-sqlite3";
 import {
   Table,

@@ -1,5 +1,3 @@
-// src/backend/database/ReservationService.ts
-
 import { Database } from "better-sqlite3";
 import { BaseService } from "./BaseService";
 import { Reservation, CreateReservationDTO } from "@/shared/types/Reservation";
@@ -12,6 +10,12 @@ import Logger from "@/shared/logger";
 import { TableService } from "./TableService";
 import { PrayerService } from "./PrayerService";
 
+/**
+ * ReservationService handles reservations, including creation, confirmation, and cancellation.
+ * It extends BaseService to leverage common database utilities such as transactions and logging.
+ * It also uses PrayerService to check for prayer time conflicts.
+ * The service is responsible for managing the reservations table.
+ */
 export class ReservationService extends BaseService {
   private tableService: TableService;
   private prayerService: PrayerService;
@@ -85,10 +89,11 @@ export class ReservationService extends BaseService {
       }
 
       // Instantiate PrayerService and check for prayer time conflict
-      const prayerConflict = await this.prayerService.isDuringPrayerTimeInterval(
-        new Date(data.startTime),
-        new Date(data.endTime)
-      );
+      const prayerConflict =
+        await this.prayerService.isDuringPrayerTimeInterval(
+          new Date(data.startTime),
+          new Date(data.endTime)
+        );
       if (prayerConflict) {
         Logger.warn("Reservation conflicts with prayer times");
         throw new BusinessError("Reservation conflicts with prayer times");

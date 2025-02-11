@@ -1,5 +1,3 @@
-// src/backend/database/SessionService.ts
-
 import { Database } from "better-sqlite3";
 import { BaseService } from "./BaseService";
 import {

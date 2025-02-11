@@ -1,5 +1,3 @@
-// src/backend/database/ReportService.ts
-
 import Database from "better-sqlite3";
 import { BaseService } from "./BaseService";
 import Logger from "@/shared/logger";

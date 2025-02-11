@@ -1,5 +1,3 @@
-// src/backend/database/UserService.ts
-
 import Database from "better-sqlite3";
 import { BaseService } from "./BaseService";
 import { User, CreateUserDTO } from "@/shared/types/User";
