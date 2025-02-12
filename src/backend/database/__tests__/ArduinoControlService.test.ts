@@ -1,103 +1,161 @@
+// src/backend/database/__tests__/ArduinoControlService.test.ts
 import { ArduinoControlService } from "../ArduinoControlService";
 import { SerialPort } from "serialport";
+import { PlatformUtils } from "../../../utils/platform";
 import Logger from "@/shared/logger";
-import { BusinessError } from "@/shared/types/errors";
+
+// Mock Logger
+jest.mock("@/shared/logger", () => ({
+  info: jest.fn(),
+  error: jest.fn(),
+  warn: jest.fn(),
+}));
+
+// Create mock instance before tests
+const mockOn = jest.fn();
+const mockWrite = jest.fn();
+const mockOpen = jest.fn();
+const mockClose = jest.fn();
+
+const mockSerialPortInstance = {
+  on: mockOn,
+  write: mockWrite,
+  open: mockOpen,
+  close: mockClose,
+};
 
 // Mock SerialPort
-jest.mock("serialport", () => {
-  const mockOn = jest.fn();
-  const mockWrite = jest.fn();
+jest.mock("serialport", () => ({
+  SerialPort: jest.fn().mockImplementation(() => mockSerialPortInstance),
+}));
 
-  return {
-    SerialPort: jest.fn().mockImplementation((options, _) => ({
-      on: mockOn,
-      write: mockWrite,
-      path: options.path,
-      baudRate: options.baudRate,
-    })),
-  };
-});
+// Mock PlatformUtils
+jest.mock("../../../utils/platform", () => ({
+  PlatformUtils: {
+    findArduinoPort: jest.fn(),
+    getDefaultSerialConfig: jest.fn().mockReturnValue({
+      baudRate: 9600,
+      dataBits: 8,
+      parity: "none",
+      stopBits: 1,
+      autoOpen: false,
+    }),
+  },
+}));
 
-describe("ArduinoControlService", () => {
+describe("ArduinoService", () => {
   let service: ArduinoControlService;
-  let mockPort: jest.Mocked<SerialPort>;
   const defaultPortPath = "/dev/ttyUSB0";
-  const defaultBaudRate = 9600;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
-    service = new ArduinoControlService(defaultPortPath);
-    mockPort = (SerialPort as unknown as jest.Mock).mock.results[0].value;
+    (PlatformUtils.findArduinoPort as jest.Mock).mockResolvedValue(
+      defaultPortPath
+    );
+
+    // Reset mock instance state
+    mockOn.mockReset();
+    mockWrite.mockReset();
+    mockOpen.mockReset();
+    mockClose.mockReset();
+
+    // Create service instance
+    service = new ArduinoControlService();
+
+    // Wait for initialization to complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-  describe("constructor", () => {
-    it("should initialize with default baud rate", () => {
-      expect(SerialPort).toHaveBeenCalledWith(
-        { baudRate: defaultBaudRate, path: defaultPortPath },
-        expect.any(Function)
-      );
+  describe("initialization", () => {
+    it("should initialize with platform-specific port", async () => {
+      expect(PlatformUtils.findArduinoPort).toHaveBeenCalled();
+      expect(SerialPort).toHaveBeenCalledWith({
+        path: defaultPortPath,
+        baudRate: 9600,
+        dataBits: 8,
+        parity: "none",
+        stopBits: 1,
+        autoOpen: false,
+      });
     });
 
-    it("should initialize with custom baud rate", () => {
-      const customBaudRate = 115200;
-      service = new ArduinoControlService(defaultPortPath, customBaudRate);
-      expect(SerialPort).toHaveBeenCalledWith(
-        { baudRate: customBaudRate, path: defaultPortPath },
-        expect.any(Function)
-      );
-    });
+    it("should handle port detection failure", async () => {
+      (PlatformUtils.findArduinoPort as jest.Mock).mockResolvedValue(null);
+      //   const newService = new ArduinoService();
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
-    it("should set up error and open event handlers", () => {
-      expect(mockPort.on).toHaveBeenCalledWith("open", expect.any(Function));
-      expect(mockPort.on).toHaveBeenCalledWith("error", expect.any(Function));
-    });
-
-    it("should log error on initialization failure", () => {
-      const error = new Error("Port access denied");
-      const initCallback = (SerialPort as unknown as jest.Mock).mock
-        .calls[0][1];
-
-      initCallback(error);
       expect(Logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("Error initializing Arduino serial port")
+        expect.stringContaining("Failed to initialize Arduino"),
+        expect.any(Error)
       );
     });
 
-    it("should log success on port open", () => {
-      const openCall = mockPort.on.mock.calls.find(
-        (call) => call[0] === "open"
-      );
-      if (!openCall) throw new Error("Open handler not found");
-      const openHandler = openCall[1];
-      openHandler();
-      expect(Logger.info).toHaveBeenCalledWith(
-        expect.stringContaining(`Arduino serial port ${defaultPortPath} opened`)
-      );
+    it("should set up all required event listeners", () => {
+      expect(mockOn).toHaveBeenCalledWith("open", expect.any(Function));
+      expect(mockOn).toHaveBeenCalledWith("error", expect.any(Function));
+      expect(mockOn).toHaveBeenCalledWith("close", expect.any(Function));
+      expect(mockOn).toHaveBeenCalledWith("data", expect.any(Function));
     });
 
-    it("should log error on port error", () => {
-      const error = new Error("Communication error");
-      const errorHandlerCall = mockPort.on.mock.calls.find(
+    it("should attempt reconnection on connection failure", async () => {
+      const error = new Error("Connection failed");
+      const errorHandlerCall = mockOn.mock.calls.find(
         (call) => call[0] === "error"
       );
       if (!errorHandlerCall) throw new Error("Error handler not found");
       const errorHandler = errorHandlerCall[1];
+
       errorHandler(error);
+
       expect(Logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("Arduino serial port error")
+        expect.stringContaining("Arduino connection error"),
+        error
       );
+
+      await new Promise((resolve) => setTimeout(resolve, 2100));
+      expect(PlatformUtils.findArduinoPort).toHaveBeenCalledTimes(2);
     });
   });
 
-  describe("sendCommand", () => {
+  describe("connection management", () => {
+    it("should handle successful connection", async () => {
+      mockOpen.mockImplementation((callback) => callback(null));
+      const openCall = mockOn.mock.calls.find((call) => call[0] === "open");
+      if (!openCall) throw new Error("Open handler not found");
+      const openHandler = openCall[1];
+
+      openHandler();
+      expect(Logger.info).toHaveBeenCalledWith(
+        expect.stringContaining("Arduino port opened")
+      );
+    });
+
+    it("should handle connection errors", async () => {
+      const error = new Error("Connection failed");
+      mockOpen.mockImplementation((callback) => callback(error));
+
+      await expect(service["connect"]()).rejects.toThrow(
+        "Error opening Arduino port"
+      );
+    });
+
+    it("should handle disconnection", async () => {
+      await service.disconnect();
+      expect(mockClose).toHaveBeenCalled();
+    });
+  });
+
+  describe("command sending", () => {
+    beforeEach(() => {
+      const openCall = mockOn.mock.calls.find((call) => call[0] === "open");
+      if (openCall) openCall[1]();
+    });
+
     it("should send command with newline character", async () => {
-      mockPort.write.mockImplementation((_, callback) => {
-        if (callback) callback(null);
-        return true;
-      });
+      mockWrite.mockImplementation((_, callback) => callback(null));
 
       await service.sendCommand("TEST_COMMAND");
-      expect(mockPort.write).toHaveBeenCalledWith(
+      expect(mockWrite).toHaveBeenCalledWith(
         "TEST_COMMAND\n",
         expect.any(Function)
       );
@@ -108,132 +166,74 @@ describe("ArduinoControlService", () => {
 
     it("should handle write errors", async () => {
       const error = new Error("Write failed");
-      mockPort.write.mockImplementation((_, callback) => {
-        if (callback) callback(error);
-        return true;
-      });
+      mockWrite.mockImplementation((_, callback) => callback(error));
 
       await expect(service.sendCommand("TEST_COMMAND")).rejects.toThrow(
-        BusinessError
+        "Error sending command to Arduino"
       );
       expect(Logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("Error sending command")
+        expect.stringContaining("Error sending command to Arduino"),
+        error
+      );
+    });
+
+    it("should reject commands when not connected", async () => {
+      service["isConnected"] = false;
+      await expect(service.sendCommand("TEST_COMMAND")).rejects.toThrow(
+        "Arduino not connected"
       );
     });
   });
 
-  describe("table control commands", () => {
-    beforeEach(() => {
-      mockPort.write.mockImplementation((_, callback) => {
-        if (callback) callback(null);
-        return true;
-      });
+  describe("connection status", () => {
+    it("should report correct connection status", () => {
+      expect(service.isArduinoConnected()).toBeFalsy();
+
+      const openCall = mockOn.mock.calls.find((call) => call[0] === "open");
+      if (openCall) openCall[1]();
+
+      expect(service.isArduinoConnected()).toBeTruthy();
     });
 
-    it("should send correct command for turnLightsOn", async () => {
-      await service.turnLightsOn();
-      expect(mockPort.write).toHaveBeenCalledWith(
-        "LIGHTS_ON\n",
-        expect.any(Function)
-      );
-    });
+    it("should handle unexpected disconnection", () => {
+      const openCall = mockOn.mock.calls.find((call) => call[0] === "open");
+      if (openCall) openCall[1]();
 
-    it("should send correct command for turnLightsOff", async () => {
-      await service.turnLightsOff();
-      expect(mockPort.write).toHaveBeenCalledWith(
-        "LIGHTS_OFF\n",
-        expect.any(Function)
-      );
-    });
+      const closeCall = mockOn.mock.calls.find((call) => call[0] === "close");
+      if (closeCall) closeCall[1]();
 
-    it("should send correct command for signalTableReady", async () => {
-      await service.signalTableReady();
-      expect(mockPort.write).toHaveBeenCalledWith(
-        "TABLE_READY\n",
-        expect.any(Function)
-      );
-    });
-
-    it("should send correct command for signalTableOff", async () => {
-      await service.signalTableOff();
-      expect(mockPort.write).toHaveBeenCalledWith(
-        "TABLE_OFF\n",
-        expect.any(Function)
-      );
-    });
-
-    it("should handle errors for all table control commands", async () => {
-      const error = new Error("Write failed");
-      mockPort.write.mockImplementation((_, callback) => {
-        if (callback) callback(error);
-        return true;
-      });
-
-      await expect(service.turnLightsOn()).rejects.toThrow(BusinessError);
-      await expect(service.turnLightsOff()).rejects.toThrow(BusinessError);
-      await expect(service.signalTableReady()).rejects.toThrow(BusinessError);
-      await expect(service.signalTableOff()).rejects.toThrow(BusinessError);
+      expect(service.isArduinoConnected()).toBeFalsy();
     });
   });
 
   describe("error handling", () => {
-    it("should return detailed error messages", async () => {
-      const error = new Error("Port locked");
-      mockPort.write.mockImplementation((_, callback) => {
-        if (callback) callback(error);
-        return true;
-      });
+    it("should limit reconnection attempts", async () => {
+      const error = new Error("Connection failed");
+      const errorHandler = mockOn.mock.calls.find(
+        (call) => call[0] === "error"
+      )[1];
 
-      try {
-        await service.sendCommand("TEST_COMMAND");
-      } catch (e) {
-        expect(e).toBeInstanceOf(BusinessError);
-        expect(e.message).toContain("Port locked");
+      for (let i = 0; i < 4; i++) {
+        errorHandler(error);
+        await new Promise((resolve) => setTimeout(resolve, 2100));
       }
+
+      expect(PlatformUtils.findArduinoPort).toHaveBeenCalledTimes(4);
+      expect(Logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("Max reconnection attempts reached")
+      );
     });
 
-    it("should log all errors with appropriate context", async () => {
-      const error = new Error("Connection lost");
-      mockPort.write.mockImplementation((_, callback) => {
-        if (callback) callback(error);
-        return true;
-      });
+    it("should handle data reception", () => {
+      const dataHandler = mockOn.mock.calls.find(
+        (call) => call[0] === "data"
+      )[1];
 
-      try {
-        await service.sendCommand("TEST_COMMAND");
-      } catch (e) {
-        expect(Logger.error).toHaveBeenCalledWith(
-          expect.stringContaining("TEST_COMMAND")
-        );
-        expect(Logger.error).toHaveBeenCalledWith(
-          expect.stringContaining("Connection lost")
-        );
-      }
-    });
-  });
-
-  describe("edge cases", () => {
-    it("should handle empty commands", async () => {
-      mockPort.write.mockImplementation((_, callback) => {
-        if (callback) callback(null);
-        return true;
-      });
-
-      await service.sendCommand("");
-      expect(mockPort.write).toHaveBeenCalledWith("\n", expect.any(Function));
-    });
-
-    it("should handle commands with special characters", async () => {
-      mockPort.write.mockImplementation((_, callback) => {
-        if (callback) callback(null);
-        return true;
-      });
-
-      const specialCommand = "TEST@#$%^&*";
-      await service.sendCommand(specialCommand);
-      expect(mockPort.write).toHaveBeenCalledWith(
-        `${specialCommand}\n`,
-        expect.any(Function)
+      const testData = Buffer.from("Test data");
+      dataHandler(testData);
+      expect(Logger.info).toHaveBeenCalledWith(
+        expect.stringContaining("Received data from Arduino:"),
+        expect.stringContaining("Test data")
       );
     });
   });

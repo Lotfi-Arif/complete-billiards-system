@@ -1,13 +1,13 @@
 import { ipcMain } from "electron";
 import Logger from "@/shared/logger";
-import { ReservationService } from "../../backend/database/ReservationService";
-import { TableService } from "../../backend/database/TableService";
-import { SessionService } from "../../backend/database/SessionService";
-import { UserService } from "../../backend/database/UserService";
-import { PrayerService } from "../../backend/database/PrayerService";
-import { PaymentService } from "../../backend/database/PaymentService";
-import { PoolTableControlService } from "../../backend/database/PoolTableControlService";
-import { ArduinoControlService } from "../../backend/database/ArduinoControlService";
+import { ReservationService } from "@/backend/database/ReservationService";
+import { TableService } from "@/backend/database/TableService";
+import { SessionService } from "@/backend/database/SessionService";
+import { UserService } from "@/backend/database/UserService";
+import { PrayerService } from "@/backend/database/PrayerService";
+import { PaymentService } from "@/backend/database/PaymentService";
+import { PoolTableControlService } from "@/backend/database/PoolTableControlService";
+import { ArduinoControlService } from "@/backend/database/ArduinoControlService";
 import Database from "better-sqlite3";
 import { TableStatus } from "@/shared/types/Table";
 
@@ -23,7 +23,7 @@ const sessionService = new SessionService(database);
 const userService = new UserService(database, jwtSecret);
 const prayerService = new PrayerService();
 const paymentService = new PaymentService(database);
-const arduinoControlService = new ArduinoControlService("/dev/ttyUSB0"); // Adjust port as needed.
+const arduinoControlService = new ArduinoControlService();
 const poolTableControlService = new PoolTableControlService(
   tableService,
   arduinoControlService

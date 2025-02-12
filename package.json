@@ -5,17 +5,23 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dev": "tsc && concurrently \"tsc -w\" \"electron .\"",
+    "dev": "rimraf dist && tsc && concurrently \"tsc -w\" \"cross-env NODE_ENV=development electron .\"",
     "test": "jest --setupFiles ./jest.setup.js",
-    "build": "tsc -p electron.tsconfig.json && tsc -p renderer.tsconfig.json",
-    "watch": "tsc -p electron.tsconfig.json -w",
+    "build": "rimraf dist && tsc",
+    "watch": "tsc -w",
     "lint": "eslint -c .eslintrc.js './src/**/*.{ts,tsx}'",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "test:unit": "jest tests/unit",
     "test:integration": "jest tests/integration",
     "test:e2e": "jest tests/e2e",
     "test:coverage": "jest --coverage",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist",
+    "package": "npm run build && electron-builder",
+    "package:dir": "npm run build && electron-builder --dir",
+    "package:win": "npm run build && electron-builder --win",
+    "package:mac": "npm run build && electron-builder --mac",
+    "package:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
     "@emotion/react": "^11.11.1",
@@ -24,6 +30,7 @@
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.8.1",
     "electron-is-dev": "^3.0.1",
+    "module-alias": "^2.2.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "serialport": "^13.0.0",
@@ -37,6 +44,7 @@
     "@types/electron": "^1.6.10",
     "@types/jest": "^29.5.14",
     "@types/jsonwebtoken": "^9.0.8",
+    "@types/module-alias": "^2.0.4",
     "@types/node": "^22.13.1",
     "@types/node-fetch": "^2.6.12",
     "@types/play-sound": "^1.1.2",
@@ -47,6 +55,7 @@
     "@typescript-eslint/eslint-plugin": "^8.23.0",
     "@typescript-eslint/parser": "^8.23.0",
     "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
     "electron": "^25.3.1",
     "electron-builder": "^24.6.3",
     "electron-rebuild": "^3.2.0",
@@ -56,7 +65,34 @@
     "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
     "play-sound": "^1.1.6",
+    "rimraf": "^5.0.5",
     "ts-jest": "^29.2.5",
     "typescript": "^5.1.6"
+  },
+  "build": {
+    "appId": "com.yourdomain.poolhallmanager",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "build"
+    },
+    "mac": {
+      "category": "public.app-category.business"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office"
+    }
   }
 }

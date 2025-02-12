@@ -1,31 +1,90 @@
-// src/main/preload.ts
 import { contextBridge, ipcRenderer } from "electron";
+import { TableStatus } from "@/shared/types/Table";
 
-contextBridge.exposeInMainWorld("api", {
-  createReservation: (data: any) =>
-    ipcRenderer.invoke("create-reservation", data),
-  cancelReservation: (id: number) =>
-    ipcRenderer.invoke("cancel-reservation", id),
-  startSession: (data: any) => ipcRenderer.invoke("start-session", data),
-  endSession: (id: number, data: any) =>
-    ipcRenderer.invoke("end-session", id, data),
-  authenticateUser: (username: string, password: string) =>
+// Define the API types
+interface ElectronAPI {
+  // Reservation operations
+  createReservation: (
+    data: any
+  ) => Promise<{ success: boolean; data?: any; error?: string }>;
+  cancelReservation: (
+    id: number
+  ) => Promise<{ success: boolean; data?: any; error?: string }>;
+
+  // Session operations
+  startSession: (
+    data: any
+  ) => Promise<{ success: boolean; data?: any; error?: string }>;
+  endSession: (
+    id: number,
+    data: any
+  ) => Promise<{ success: boolean; data?: any; error?: string }>;
+
+  // User operations
+  authenticateUser: (
+    username: string,
+    password: string
+  ) => Promise<{ success: boolean; data?: string; error?: string }>;
+  createUser: (
+    userData: any
+  ) => Promise<{ success: boolean; data?: any; error?: string }>;
+
+  // Prayer operations
+  getPrayerTimes: (
+    dateStr: string
+  ) => Promise<{ success: boolean; data?: any; error?: string }>;
+  getNextPrayer: (
+    dateStr: string
+  ) => Promise<{ success: boolean; data?: any; error?: string }>;
+
+  // Table operations
+  updateTableStatus: (
+    tableId: number,
+    status: TableStatus | undefined,
+    performedBy: number
+  ) => Promise<{ success: boolean; data?: any; error?: string }>;
+  openTable: (tableId: number) => Promise<{ success: boolean; error?: string }>;
+  closeTable: (
+    tableId: number
+  ) => Promise<{ success: boolean; error?: string }>;
+  setTableCooldown: (
+    tableId: number,
+    cooldownMinutes: number
+  ) => Promise<{ success: boolean; error?: string }>;
+
+  // Payment operations
+  createPayment: (
+    data: any
+  ) => Promise<{ success: boolean; data?: any; error?: string }>;
+}
+
+// Expose the API to the renderer process
+contextBridge.exposeInMainWorld("electron", {
+  // Reservation operations
+  createReservation: (data) => ipcRenderer.invoke("create-reservation", data),
+  cancelReservation: (id) => ipcRenderer.invoke("cancel-reservation", id),
+
+  // Session operations
+  startSession: (data) => ipcRenderer.invoke("start-session", data),
+  endSession: (id, data) => ipcRenderer.invoke("end-session", id, data),
+
+  // User operations
+  authenticateUser: (username, password) =>
     ipcRenderer.invoke("authenticate-user", username, password),
-  createUser: (userData: any) => ipcRenderer.invoke("create-user", userData),
-  getPrayerTimes: (dateStr: string) =>
-    ipcRenderer.invoke("get-prayer-times", dateStr),
-  getNextPrayer: (dateStr: string) =>
-    ipcRenderer.invoke("get-next-prayer", dateStr),
-  updateTableStatus: (tableId: number, status: string, performedBy: number) =>
+  createUser: (userData) => ipcRenderer.invoke("create-user", userData),
+
+  // Prayer operations
+  getPrayerTimes: (dateStr) => ipcRenderer.invoke("get-prayer-times", dateStr),
+  getNextPrayer: (dateStr) => ipcRenderer.invoke("get-next-prayer", dateStr),
+
+  // Table operations
+  updateTableStatus: (tableId, status, performedBy) =>
     ipcRenderer.invoke("update-table-status", tableId, status, performedBy),
-  openTable: (tableId: number) => ipcRenderer.invoke("open-table", tableId),
-  closeTable: (tableId: number) => ipcRenderer.invoke("close-table", tableId),
-  setTableCooldown: (tableId: number, cooldownMinutes: number) =>
+  openTable: (tableId) => ipcRenderer.invoke("open-table", tableId),
+  closeTable: (tableId) => ipcRenderer.invoke("close-table", tableId),
+  setTableCooldown: (tableId, cooldownMinutes) =>
     ipcRenderer.invoke("set-table-cooldown", tableId, cooldownMinutes),
-  createPayment: (data: any) => ipcRenderer.invoke("create-payment", data),
-  createNotification: (data: any) =>
-    ipcRenderer.invoke("create-notification", data),
-  markNotificationAsRead: (id: number) =>
-    ipcRenderer.invoke("mark-notification-as-read", id),
-  // Expose additional endpoints as needed.
-});
+
+  // Payment operations
+  createPayment: (data) => ipcRenderer.invoke("create-payment", data),
+} as ElectronAPI);

@@ -1,138 +1,173 @@
-import { app, BrowserWindow, ipcMain } from "electron";
-import * as path from "path";
-import isDev from "electron-is-dev";
-import { registerIpcHandlers } from "./ipc/handlers";
-import { DatabaseService } from "../backend/database/DatabaseService";
-import { ArduinoService } from "../backend/arduino/ArduinoService";
-import { PrayerService } from "../backend/database/PrayerService";
+// src/main/main.ts
+import "module-alias/register";
+import { app, BrowserWindow } from "electron";
+import path from "path";
+import fs from "fs-extra";
+import * as moduleAlias from "module-alias";
+import Database from "better-sqlite3";
 
-class MainProcess {
-  private mainWindow: BrowserWindow | null = null;
-  private db: DatabaseService;
-  private arduino: ArduinoService;
-  private prayer: PrayerService;
+// Setup module aliases before other imports
+moduleAlias.addAliases({
+  "@": path.join(__dirname, ".."),
+});
 
-  constructor() {
-    // Initialize core services
-    this.db = new DatabaseService({
-      filename: path.join(app.getPath("userData"), "pool-manager.db"),
-    });
+import Logger from "@/shared/logger";
+import { PlatformUtils } from "@/utils/platform";
+import { initializeDatabase } from "@/backend/database/initDatabase";
 
-    this.arduino = new ArduinoService({
-      baudRate: 9600,
-      autoConnect: true,
-    });
+let mainWindow: BrowserWindow | null = null;
+let database: Database.Database | null = null;
 
-    this.prayer = new PrayerService({
-      latitude: 21.4225, // Default coordinates (configurable)
-      longitude: 39.8262,
-      timeZone: "Asia/Riyadh",
-      prayerWindowMinutes: 30,
-    });
+async function ensureAppDirectories() {
+  try {
+    const appDataPath = PlatformUtils.getAppDataPath();
+    await fs.ensureDir(appDataPath);
+    Logger.info("App directories created at:", appDataPath);
+  } catch (error) {
+    Logger.error("Error creating app directories:", error);
+    throw error;
   }
+}
 
-  async initialize() {
-    try {
-      // Wait for app to be ready
-      await app.whenReady();
+async function initializeAppDatabase() {
+  try {
+    const dbPath = path.join(PlatformUtils.getAppDataPath(), "pool-hall.db");
+    database = initializeDatabase(dbPath);
 
-      // Create main window
-      this.createWindow();
+    // After database is initialized, load handlers
+    // We use dynamic import to ensure database is initialized first
+    await import("./ipc/handlers");
 
-      // Register IPC handlers
-      registerIpcHandlers(this.db, this.arduino, this.prayer);
-
-      // Set up app event handlers
-      this.setupAppEvents();
-
-      // Try to connect Arduino
-      await this.arduino.connect().catch(console.error);
-    } catch (error) {
-      console.error("Failed to initialize application:", error);
-      app.quit();
-    }
+    Logger.info("Database and handlers initialized successfully");
+  } catch (error) {
+    Logger.error("Error initializing database:", error);
+    throw error;
   }
+}
 
-  private createWindow() {
-    // Create the browser window
-    this.mainWindow = new BrowserWindow({
+const createWindow = () => {
+  try {
+    const windowConfig: Electron.BrowserWindowConstructorOptions = {
       width: 1200,
       height: 800,
-      minWidth: 800,
-      minHeight: 600,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
         preload: path.join(__dirname, "preload.js"),
       },
-    });
+    };
 
-    // Load the app
-    if (isDev) {
-      // In development, load from React dev server
-      this.mainWindow.loadURL("http://localhost:3000");
-      // Open DevTools
-      this.mainWindow.webContents.openDevTools();
+    if (PlatformUtils.isMac()) {
+      windowConfig.titleBarStyle = "hidden";
+      windowConfig.trafficLightPosition = { x: 20, y: 20 };
+    }
+
+    mainWindow = new BrowserWindow(windowConfig);
+
+    if (process.env.NODE_ENV === "development") {
+      mainWindow.loadURL("http://localhost:3000");
+      mainWindow.webContents.openDevTools();
     } else {
-      // In production, load the built app
-      this.mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+      mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
     }
 
-    // Handle window close
-    this.mainWindow.on("closed", () => {
-      this.mainWindow = null;
-    });
-  }
-
-  private setupAppEvents() {
-    // Handle macOS specific behavior
-    app.on("activate", () => {
-      if (!this.mainWindow) {
-        this.createWindow();
-      }
-    });
-
-    // Handle window-all-closed event
-    app.on("window-all-closed", () => {
-      if (process.platform !== "darwin") {
-        app.quit();
-      }
-    });
-
-    // Clean up before quit
-    app.on("before-quit", async () => {
-      await this.cleanup();
-    });
-
-    // Handle uncaught exceptions
-    process.on("uncaughtException", (error) => {
-      console.error("Uncaught exception:", error);
-      this.mainWindow?.webContents.send("system:error", {
-        type: "uncaught-exception",
-        message: error.message,
+    if (PlatformUtils.isMac()) {
+      mainWindow.on("enter-full-screen", () => {
+        mainWindow?.webContents.send("fullscreen-change", true);
       });
-    });
-  }
 
-  private async cleanup() {
-    try {
-      // Clean up services
-      this.db.cleanup();
-      this.arduino.cleanup();
-
-      // Additional cleanup
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.close();
-      }
-    } catch (error) {
-      console.error("Error during cleanup:", error);
+      mainWindow.on("leave-full-screen", () => {
+        mainWindow?.webContents.send("fullscreen-change", false);
+      });
     }
+
+    mainWindow.on("closed", () => {
+      mainWindow = null;
+    });
+
+    Logger.info("Main window created successfully");
+  } catch (error) {
+    Logger.error("Error creating main window:", error);
+    throw error;
+  }
+};
+
+async function initializeApp() {
+  try {
+    await ensureAppDirectories();
+    await initializeAppDatabase();
+    createWindow();
+    Logger.info("Application initialized successfully");
+  } catch (error) {
+    Logger.error("Error initializing application:", error);
+    app.quit();
   }
 }
 
-// Create and initialize the application
-const mainProcess = new MainProcess();
-mainProcess.initialize().catch((error) => {
-  console.error("Failed to start application:", error);
+// Register app event handlers
+app
+  .whenReady()
+  .then(initializeApp)
+  .catch((error) => {
+    Logger.error("Error during app initialization:", error);
+    app.quit();
+  });
+
+// Cleanup function
+function cleanup() {
+  try {
+    if (database) {
+      database.close();
+      database = null;
+    }
+    Logger.info("Database connection closed");
+  } catch (error) {
+    Logger.error("Error during cleanup:", error);
+  }
+}
+
+app.on("window-all-closed", () => {
+  cleanup();
+  if (!PlatformUtils.isMac()) {
+    app.quit();
+  }
+});
+
+app.on("activate", () => {
+  if (mainWindow === null) {
+    createWindow();
+  }
+});
+
+if (PlatformUtils.isMac()) {
+  app.on("before-quit", () => {
+    Logger.info("Application quitting...");
+    cleanup();
+  });
+}
+
+if (PlatformUtils.isWindows()) {
+  app.setAppUserModelId("com.yourdomain.poolhallmanager");
+}
+
+// Global error handlers
+process.on("uncaughtException", (error) => {
+  Logger.error("Uncaught exception:", error);
+  if (process.env.NODE_ENV === "development") {
+    console.error("Uncaught Exception:", error);
+  }
+  cleanup();
   app.quit();
+});
+
+process.on("unhandledRejection", (error) => {
+  Logger.error("Unhandled rejection:", error);
+  if (process.env.NODE_ENV === "development") {
+    console.error("Unhandled Rejection:", error);
+  }
+});
+
+app.on("quit", () => {
+  cleanup();
+  Logger.info("Application quit");
 });
