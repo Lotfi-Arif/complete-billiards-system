@@ -5,12 +5,15 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dev": "rimraf dist && tsc && concurrently \"tsc -w\" \"cross-env NODE_ENV=development electron .\"",
-    "test": "jest --setupFiles ./jest.setup.js",
-    "build": "rimraf dist && tsc",
-    "watch": "tsc -w",
+    "dev": "rimraf dist && concurrently \"tsc -p tsconfig.json -w\" \"vite\" \"cross-env NODE_ENV=development electron .\"",
+    "build:main": "tsc --project tsconfig.json",
+    "build:renderer": "tsc --project tsconfig.renderer.json",
+    "build": "rimraf dist && npm run build:main && npm run build:renderer",
+    "watch": "concurrently \"tsc -p tsconfig.json -w\" \"tsc -p tsconfig.renderer.json -w\"",
+    "serve:renderer": "vite",
     "lint": "eslint -c .eslintrc.js './src/**/*.{ts,tsx}'",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "test": "jest --setupFiles ./jest.setup.js",
     "test:unit": "jest tests/unit",
     "test:integration": "jest tests/integration",
     "test:e2e": "jest tests/e2e",
@@ -54,6 +57,7 @@
     "@types/testing-library__jest-dom": "^6.0.0",
     "@typescript-eslint/eslint-plugin": "^8.23.0",
     "@typescript-eslint/parser": "^8.23.0",
+    "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
     "electron": "^25.3.1",
@@ -67,7 +71,8 @@
     "play-sound": "^1.1.6",
     "rimraf": "^5.0.5",
     "ts-jest": "^29.2.5",
-    "typescript": "^5.1.6"
+    "typescript": "^5.1.6",
+    "vite": "^6.1.0"
   },
   "build": {
     "appId": "com.yourdomain.poolhallmanager",

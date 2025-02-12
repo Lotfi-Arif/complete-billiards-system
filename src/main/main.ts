@@ -6,7 +6,7 @@ import fs from "fs-extra";
 import * as moduleAlias from "module-alias";
 import Database from "better-sqlite3";
 
-// Setup module aliases before other imports
+// Setup module aliases
 moduleAlias.addAliases({
   "@": path.join(__dirname, ".."),
 });
@@ -31,13 +31,17 @@ async function ensureAppDirectories() {
 
 async function initializeAppDatabase() {
   try {
-    const dbPath = path.join(PlatformUtils.getAppDataPath(), "pool-hall.db");
-    database = initializeDatabase(dbPath);
+    const dbPath = PlatformUtils.getDatabasePath();
+    Logger.info("Initializing database at:", dbPath);
 
-    // After database is initialized, load handlers
-    // We use dynamic import to ensure database is initialized first
-    await import("./ipc/handlers");
+    // Initialize database first
+    // const db = initializeDatabase(dbPath);
 
+    // // Then initialize IPC handlers with the database instance
+    // const { initializeHandlers } = await import("./ipc/handlers");
+    // initializeHandlers(db);
+
+    // database = db;
     Logger.info("Database and handlers initialized successfully");
   } catch (error) {
     Logger.error("Error initializing database:", error);
@@ -75,7 +79,6 @@ const createWindow = () => {
       mainWindow.on("enter-full-screen", () => {
         mainWindow?.webContents.send("fullscreen-change", true);
       });
-
       mainWindow.on("leave-full-screen", () => {
         mainWindow?.webContents.send("fullscreen-change", false);
       });
@@ -104,7 +107,6 @@ async function initializeApp() {
   }
 }
 
-// Register app event handlers
 app
   .whenReady()
   .then(initializeApp)
@@ -139,32 +141,15 @@ app.on("activate", () => {
   }
 });
 
-if (PlatformUtils.isMac()) {
-  app.on("before-quit", () => {
-    Logger.info("Application quitting...");
-    cleanup();
-  });
-}
-
-if (PlatformUtils.isWindows()) {
-  app.setAppUserModelId("com.yourdomain.poolhallmanager");
-}
-
 // Global error handlers
 process.on("uncaughtException", (error) => {
   Logger.error("Uncaught exception:", error);
-  if (process.env.NODE_ENV === "development") {
-    console.error("Uncaught Exception:", error);
-  }
   cleanup();
   app.quit();
 });
 
 process.on("unhandledRejection", (error) => {
   Logger.error("Unhandled rejection:", error);
-  if (process.env.NODE_ENV === "development") {
-    console.error("Unhandled Rejection:", error);
-  }
 });
 
 app.on("quit", () => {

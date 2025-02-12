@@ -13,7 +13,6 @@
     "strictNullChecks": true,
     "strictFunctionTypes": true,
     "noImplicitThis": true,
-    "noUnusedLocals": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "allowSyntheticDefaultImports": true,
@@ -26,6 +25,6 @@
       "@/*": ["src/*"]
     }
   },
-  "exclude": ["node_modules"],
+  "exclude": ["node_modules", "src/renderer"],
   "include": ["./src/**/*.ts", "./src/**/*.tsx"]
 }

@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx", // Enable JSX support (use "react" if you're on React <17)
+    "module": "ESNext", // Use ESNext for modules (suitable for bundlers)
+    "outDir": "./dist/renderer" // Output directory for renderer code
+  },
+  "include": ["src/renderer/**/*"],
+  "exclude": ["node_modules"]
+}
