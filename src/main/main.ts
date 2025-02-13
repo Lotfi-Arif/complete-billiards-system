@@ -68,12 +68,33 @@ const createWindow = () => {
 
     mainWindow = new BrowserWindow(windowConfig);
 
-    if (process.env.NODE_ENV === "development") {
-      mainWindow.loadURL("http://localhost:3000");
+    const isDev = process.env.NODE_ENV === "development";
+    Logger.info(`Running in ${isDev ? "development" : "production"} mode`);
+
+    if (isDev) {
+      const devServerUrl = "http://localhost:3000";
+      Logger.info(`Loading development server from: ${devServerUrl}`);
+      mainWindow.loadURL(devServerUrl);
       mainWindow.webContents.openDevTools();
+
+      mainWindow.webContents.on(
+        "did-fail-load",
+        (event, errorCode, errorDescription) => {
+          Logger.error(
+            `Failed to load dev server: ${errorDescription} (${errorCode})`
+          );
+        }
+      );
     } else {
-      mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+      const indexPath = PlatformUtils.getUIPath();
+      Logger.info(`Loading production build from: ${indexPath}`);
+      mainWindow.loadFile(indexPath);
     }
+
+    // Setup window event handlers
+    mainWindow.webContents.on("did-finish-load", () => {
+      Logger.info("Window loaded successfully");
+    });
 
     if (PlatformUtils.isMac()) {
       mainWindow.on("enter-full-screen", () => {

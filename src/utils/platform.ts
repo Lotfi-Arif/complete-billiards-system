@@ -13,6 +13,10 @@ export class PlatformUtils {
     return process.platform;
   }
 
+  static getUIPath() {
+    return path.join(app.getAppPath(), "dist", "renderer", "index.html");
+  }
+
   static isWindows() {
     return process.platform === "win32";
   }

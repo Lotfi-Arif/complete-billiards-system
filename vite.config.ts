@@ -4,13 +4,21 @@ import path from "path";
 
 export default defineConfig({
   plugins: [react()],
-  root: path.resolve(__dirname, "src/renderer"),
+  base: "./", // Use relative paths
+  root: path.join(__dirname, "src/renderer"),
   build: {
-    outDir: path.resolve(__dirname, "dist/renderer"),
+    outDir: path.join(__dirname, "dist/renderer"),
     emptyOutDir: true,
+    sourcemap: true,
+    // Ensure assets are built with the correct relative paths
+    assetsDir: "assets",
+    rollupOptions: {
+      input: path.join(__dirname, "src/renderer/index.html"),
+    },
   },
   server: {
     port: 3000,
+    strictPort: true,
   },
   resolve: {
     alias: {
