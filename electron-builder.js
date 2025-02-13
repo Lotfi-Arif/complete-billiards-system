@@ -1,4 +1,3 @@
-// electron-builder.js
 const path = require("path");
 
 module.exports = {
