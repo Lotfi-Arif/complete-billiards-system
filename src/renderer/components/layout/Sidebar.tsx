@@ -1,13 +1,19 @@
 import React from "react";
 
-const Sidebar = () => {
+const Sidebar = ({
+  onNavigate,
+  currentPage,
+}: {
+  onNavigate: (page: string) => void;
+  currentPage: string;
+}) => {
   const menuItems = [
-    { icon: "🎱", name: "Dashboard", path: "/" },
-    { icon: "📅", name: "Reservations", path: "/reservations" },
-    { icon: "⏱️", name: "Active Sessions", path: "/sessions" },
-    { icon: "💰", name: "Payments", path: "/payments" },
-    { icon: "📊", name: "Reports", path: "/reports" },
-    { icon: "⚙️", name: "Settings", path: "/settings" },
+    { icon: "🏠", name: "Dashboard", path: "dashboard" },
+    { icon: "📅", name: "Reservations", path: "reservations" },
+    { icon: "⏱️", name: "Active Sessions", path: "sessions" },
+    { icon: "💰", name: "Payments", path: "payments" },
+    { icon: "📊", name: "Reports", path: "reports" },
+    { icon: "⚙️", name: "Settings", path: "settings" },
   ];
 
   return (
@@ -19,14 +25,18 @@ const Sidebar = () => {
 
       <nav className="space-y-1">
         {menuItems.map((item) => (
-          <a
+          <button
             key={item.path}
-            href={item.path}
-            className="flex items-center space-x-2 px-4 py-3 text-gray-300 hover:bg-slate-700 rounded-lg transition duration-150"
+            onClick={() => onNavigate(item.path)}
+            className={`w-full flex items-center space-x-2 px-4 py-3 rounded-lg transition-colors ${
+              currentPage === item.path
+                ? "bg-blue-500 text-white"
+                : "text-gray-300 hover:bg-slate-700"
+            }`}
           >
             <span>{item.icon}</span>
             <span>{item.name}</span>
-          </a>
+          </button>
         ))}
       </nav>
     </div>

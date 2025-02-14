@@ -1,4 +1,3 @@
-// src/renderer/App.tsx
 import React, { useState } from "react";
 import "./App.css";
 import Dashboard from "./components/Dashboard";
@@ -14,40 +13,22 @@ const App: React.FC = () => {
         return <Dashboard />;
       case "reservations":
         return <ReservationsPage />;
+      case "sessions":
+        return <div>Sessions Page</div>; // Placeholder
+      case "payments":
+        return <div>Payments Page</div>; // Placeholder
+      case "reports":
+        return <div>Reports Page</div>; // Placeholder
+      case "settings":
+        return <div>Settings Page</div>; // Placeholder
       default:
         return <Dashboard />;
     }
   };
 
   return (
-    <MainLayout>
-      <div className="h-full">
-        {/* This would normally be handled by a router, but for now we'll use state */}
-        <div className="mb-4 flex space-x-4">
-          <button
-            onClick={() => setCurrentPage("dashboard")}
-            className={`px-4 py-2 rounded-lg transition-colors ${
-              currentPage === "dashboard"
-                ? "bg-blue-500 text-white"
-                : "bg-gray-100 hover:bg-gray-200"
-            }`}
-          >
-            Dashboard
-          </button>
-          <button
-            onClick={() => setCurrentPage("reservations")}
-            className={`px-4 py-2 rounded-lg transition-colors ${
-              currentPage === "reservations"
-                ? "bg-blue-500 text-white"
-                : "bg-gray-100 hover:bg-gray-200"
-            }`}
-          >
-            Reservations
-          </button>
-        </div>
-
-        {renderPage()}
-      </div>
+    <MainLayout onNavigate={setCurrentPage} currentPage={currentPage}>
+      <div className="h-full">{renderPage()}</div>
     </MainLayout>
   );
 };
