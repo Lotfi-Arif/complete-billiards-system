@@ -3,6 +3,7 @@ import "./App.css";
 import Dashboard from "./components/Dashboard";
 import ReservationsPage from "./pages/ReservationsPage";
 import MainLayout from "./components/layout/MainLayout";
+import SessionsPage from "./pages/SessionsPage";
 
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<string>("dashboard");
@@ -14,7 +15,7 @@ const App: React.FC = () => {
       case "reservations":
         return <ReservationsPage />;
       case "sessions":
-        return <div>Sessions Page</div>; // Placeholder
+        return <SessionsPage />;
       case "payments":
         return <div>Payments Page</div>; // Placeholder
       case "reports":
