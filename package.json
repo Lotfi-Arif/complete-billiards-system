@@ -4,9 +4,11 @@
   "main": "dist/main/main.js",
   "license": "MIT",
   "scripts": {
+    "start:electron": "wait-on tcp:3000 && cross-env NODE_ENV=development electron .",
+    "postinstall": "electron-builder install-app-deps && yarn rebuild",
+    "dev": "rimraf dist && yarn dev:main && concurrently \"yarn watch:main\" \"yarn dev:renderer\" \"yarn start:electron\"",
     "dev:main": "tsc -p tsconfig.json",
     "watch:main": "tsc -p tsconfig.json -w",
-    "dev": "rimraf dist && yarn dev:main && concurrently \"yarn watch:main\" \"yarn dev:renderer\" \"yarn electron:dev\"",
     "dev:renderer": "vite",
     "electron:dev": "wait-on tcp:3000 && cross-env NODE_ENV=development electron .",
     "build": "rimraf dist && yarn build:main && yarn build:renderer",
@@ -33,9 +35,8 @@
     "@emotion/react": "^11.11.1",
     "@emotion/styled": "^11.11.1",
     "adhan": "^4.4.3",
-    "bcryptjs": "^2.4.3",
+    "bcryptjs": "^3.0.0",
     "better-sqlite3": "^11.8.1",
-    "electron-is-dev": "^3.0.1",
     "module-alias": "^2.2.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -67,7 +68,7 @@
     "cross-env": "^7.0.3",
     "electron": "^25.3.1",
     "electron-builder": "^24.6.3",
-    "electron-rebuild": "^3.2.0",
+    "electron-rebuild": "^3.2.9",
     "eslint": "^9.20.0",
     "jest": "^29.6.2",
     "jest-environment-jsdom": "^29.7.0",
@@ -81,6 +82,20 @@
     "typescript": "^5.1.6",
     "vite": "^6.1.0",
     "wait-on": "^8.0.2"
+  },
+  "config": {
+    "forge": {
+      "electronRebuildConfig": {
+        "onlyModules": [
+          "better-sqlite3"
+        ],
+        "force": true,
+        "types": [
+          "prod",
+          "dev"
+        ]
+      }
+    }
   },
   "build": {
     "appId": "com.yourdomain.poolhallmanager",

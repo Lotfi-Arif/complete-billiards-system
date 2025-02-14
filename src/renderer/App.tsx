@@ -7,6 +7,7 @@ import SessionsPage from "./pages/SessionsPage";
 import PaymentsPage from "./pages/PaymentsPage";
 import ReportsPage from "./pages/ReportsPage";
 import SettingsPage from "./pages/SettingsPage";
+import { TableProvider } from "./contexts/TableContext";
 
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<string>("dashboard");
@@ -32,7 +33,9 @@ const App: React.FC = () => {
 
   return (
     <MainLayout onNavigate={setCurrentPage} currentPage={currentPage}>
-      <div className="h-full">{renderPage()}</div>
+      <TableProvider>
+        <div className="h-full">{renderPage()}</div>
+      </TableProvider>
     </MainLayout>
   );
 };

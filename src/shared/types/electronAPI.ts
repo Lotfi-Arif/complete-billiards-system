@@ -1,58 +1,35 @@
-import { TableStatus } from "./Table";
+import { ApiResponse, DailyPrayerTimes, PrayerTime } from "./api";
+import { CreatePaymentDTO, Payment } from "./Payment";
+import { CreateReservationDTO, Reservation } from "./Reservation";
+import { CreateSessionDTO, EndSessionDTO, Session } from "./Session";
+import { Table, TableStatus, UpdateTableDTO } from "./Table";
+import { User, CreateUserDTO } from "./User";
 
-// Define the API types
 export interface ElectronAPI {
-  // Reservation operations
-  createReservation: (
-    data: any
-  ) => Promise<{ success: boolean; data?: any; error?: string }>;
-  cancelReservation: (
-    id: number
-  ) => Promise<{ success: boolean; data?: any; error?: string }>;
-
-  // Session operations
-  startSession: (
-    data: any
-  ) => Promise<{ success: boolean; data?: any; error?: string }>;
-  endSession: (
-    id: number,
-    data: any
-  ) => Promise<{ success: boolean; data?: any; error?: string }>;
-
-  // User operations
-  authenticateUser: (
-    username: string,
-    password: string
-  ) => Promise<{ success: boolean; data?: string; error?: string }>;
-  createUser: (
-    userData: any
-  ) => Promise<{ success: boolean; data?: any; error?: string }>;
-
-  // Prayer operations
-  getPrayerTimes: (
-    dateStr: string
-  ) => Promise<{ success: boolean; data?: any; error?: string }>;
-  getNextPrayer: (
-    dateStr: string
-  ) => Promise<{ success: boolean; data?: any; error?: string }>;
-
   // Table operations
-  updateTableStatus: (
-    tableId: number,
-    status: TableStatus | undefined,
-    performedBy: number
-  ) => Promise<{ success: boolean; data?: any; error?: string }>;
-  openTable: (tableId: number) => Promise<{ success: boolean; error?: string }>;
-  closeTable: (
-    tableId: number
-  ) => Promise<{ success: boolean; error?: string }>;
-  setTableCooldown: (
-    tableId: number,
-    cooldownMinutes: number
-  ) => Promise<{ success: boolean; error?: string }>;
+  getTables: () => Promise<ApiResponse<Table[]>>;
 
-  // Payment operations
-  createPayment: (
-    data: any
-  ) => Promise<{ success: boolean; data?: any; error?: string }>;
+  getTable: (id: number) => Promise<ApiResponse<Table>>;
+
+  updateTableStatus: (
+    id: number,
+    data: UpdateTableDTO,
+    performedBy?: number
+  ) => Promise<ApiResponse<Table>>;
+
+  openTable: (id: number, performedBy?: number) => Promise<ApiResponse<Table>>;
+
+  closeTable: (id: number, performedBy?: number) => Promise<ApiResponse<Table>>;
+
+  setTableMaintenance: (
+    id: number,
+    performedBy?: number
+  ) => Promise<ApiResponse<Table>>;
+
+  setTableCooldown: (
+    id: number,
+    performedBy?: number
+  ) => Promise<ApiResponse<Table>>;
+
+  isTableAvailable: (id: number) => Promise<ApiResponse<boolean>>;
 }

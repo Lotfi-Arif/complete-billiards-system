@@ -1,5 +1,4 @@
-// src/backend/database/BaseService.ts
-import Logger from "@/shared/logger";
+import Logger from "../../shared/logger";
 import Database from "better-sqlite3";
 
 /**

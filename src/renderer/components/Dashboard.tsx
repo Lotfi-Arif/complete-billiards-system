@@ -62,7 +62,7 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* Table Grid */}
-      <TableGrid onTableAction={handleTableAction} />
+      <TableGrid />
 
       {/* Active Sessions */}
       <div className="bg-white rounded-lg shadow-sm p-6">

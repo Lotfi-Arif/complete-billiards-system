@@ -1,179 +1,197 @@
-// src/main/main.ts
-import "module-alias/register";
-import { app, BrowserWindow } from "electron";
-import path from "path";
-import fs from "fs-extra";
-import * as moduleAlias from "module-alias";
+import { app, BrowserWindow, ipcMain } from "electron";
+import { join } from "path";
 import Database from "better-sqlite3";
-
-// Setup module aliases
-moduleAlias.addAliases({
-  "@": path.join(__dirname, ".."),
-});
-
-import Logger from "@/shared/logger";
-import { PlatformUtils } from "@/utils/platform";
-import { initializeDatabase } from "@/backend/database/initDatabase";
+import { TableService } from "../backend/database/TableService";
+import Logger from "../shared/logger";
+import { TableStatus } from "../shared/types/Table";
 
 let mainWindow: BrowserWindow | null = null;
 let database: Database.Database | null = null;
+let tableService: TableService | null = null;
 
-async function ensureAppDirectories() {
+const isDevelopment = process.env.NODE_ENV === "development";
+
+function initializeDatabase() {
   try {
-    const appDataPath = PlatformUtils.getAppDataPath();
-    await fs.ensureDir(appDataPath);
-    Logger.info("App directories created at:", appDataPath);
+    const userDataPath = app.getPath("userData");
+    const dbPath = join(userDataPath, "poolhall.db");
+
+    // Ensure the directory exists
+    const fs = require("fs");
+    if (!fs.existsSync(userDataPath)) {
+      fs.mkdirSync(userDataPath, { recursive: true });
+    }
+
+    Logger.info(`Initializing database at: ${dbPath}`);
+
+    // Open database with more explicit options
+    database = new Database(dbPath, {
+      // Adjust verbose to match the expected signature
+      verbose: (message?: unknown, ...additionalArgs: unknown[]) => {
+        Logger.info(String(message), ...additionalArgs);
+      },
+      fileMustExist: false,
+      timeout: 5000,
+    });
+
+    // Test database connection
+    database.pragma("journal_mode = WAL");
+    database.pragma("foreign_keys = ON");
+
+    // Initialize service only after successful database connection
+    tableService = new TableService(database);
+
+    Logger.info("Database initialized successfully");
+    return true;
   } catch (error) {
-    Logger.error("Error creating app directories:", error);
-    throw error;
+    Logger.error("Failed to initialize database:", error);
+    if (database) {
+      try {
+        database.close();
+      } catch (closeError) {
+        Logger.error("Error closing database:", closeError);
+      }
+      database = null;
+    }
+    return false;
   }
 }
 
-async function initializeAppDatabase() {
+function createWindow() {
   try {
-    const dbPath = PlatformUtils.getDatabasePath();
-    Logger.info("Initializing database at:", dbPath);
-
-    // Initialize database first
-    // const db = initializeDatabase(dbPath);
-
-    // // Then initialize IPC handlers with the database instance
-    // const { initializeHandlers } = await import("./ipc/handlers");
-    // initializeHandlers(db);
-
-    // database = db;
-    Logger.info("Database and handlers initialized successfully");
-  } catch (error) {
-    Logger.error("Error initializing database:", error);
-    throw error;
-  }
-}
-
-const createWindow = () => {
-  try {
-    const windowConfig: Electron.BrowserWindowConstructorOptions = {
+    mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        preload: path.join(__dirname, "preload.js"),
+        preload: join(__dirname, "preload.js"),
       },
-    };
-
-    if (PlatformUtils.isMac()) {
-      windowConfig.titleBarStyle = "hidden";
-      windowConfig.trafficLightPosition = { x: 20, y: 20 };
-    }
-
-    mainWindow = new BrowserWindow(windowConfig);
-
-    const isDev = process.env.NODE_ENV === "development";
-    Logger.info(`Running in ${isDev ? "development" : "production"} mode`);
-
-    if (isDev) {
-      const devServerUrl = "http://localhost:3000";
-      Logger.info(`Loading development server from: ${devServerUrl}`);
-      mainWindow.loadURL(devServerUrl);
-      mainWindow.webContents.openDevTools();
-
-      mainWindow.webContents.on(
-        "did-fail-load",
-        (event, errorCode, errorDescription) => {
-          Logger.error(
-            `Failed to load dev server: ${errorDescription} (${errorCode})`
-          );
-        }
-      );
-    } else {
-      const indexPath = PlatformUtils.getUIPath();
-      Logger.info(`Loading production build from: ${indexPath}`);
-      mainWindow.loadFile(indexPath);
-    }
-
-    // Setup window event handlers
-    mainWindow.webContents.on("did-finish-load", () => {
-      Logger.info("Window loaded successfully");
     });
 
-    if (PlatformUtils.isMac()) {
-      mainWindow.on("enter-full-screen", () => {
-        mainWindow?.webContents.send("fullscreen-change", true);
-      });
-      mainWindow.on("leave-full-screen", () => {
-        mainWindow?.webContents.send("fullscreen-change", false);
-      });
+    if (isDevelopment) {
+      mainWindow.loadURL("http://localhost:3000");
+      mainWindow.webContents.openDevTools();
+    } else {
+      mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
     }
 
     mainWindow.on("closed", () => {
       mainWindow = null;
     });
-
-    Logger.info("Main window created successfully");
   } catch (error) {
-    Logger.error("Error creating main window:", error);
+    Logger.error("Error creating window:", error);
     throw error;
   }
-};
-
-async function initializeApp() {
-  try {
-    await ensureAppDirectories();
-    await initializeAppDatabase();
-    createWindow();
-    Logger.info("Application initialized successfully");
-  } catch (error) {
-    Logger.error("Error initializing application:", error);
-    app.quit();
-  }
 }
 
-app
-  .whenReady()
-  .then(initializeApp)
-  .catch((error) => {
-    Logger.error("Error during app initialization:", error);
-    app.quit();
+function initializeIpcHandlers() {
+  if (!tableService) {
+    throw new Error("TableService not initialized");
+  }
+
+  ipcMain.handle("get-tables", async () => {
+    try {
+      Logger.info("IPC: get-tables called");
+      if (!tableService) throw new Error("TableService not available");
+      const tables = await tableService.getAllTables();
+      return { success: true, data: tables };
+    } catch (error) {
+      Logger.error("IPC get-tables error:", error);
+      return { success: false, error: String(error) };
+    }
   });
 
-// Cleanup function
-function cleanup() {
-  try {
-    if (database) {
-      database.close();
-      database = null;
+  ipcMain.handle(
+    "open-table",
+    async (event, id: number, performedBy?: number) => {
+      try {
+        Logger.info(`IPC: open-table called for table ${id}`);
+        const table = await tableService!.updateTableStatus(
+          id,
+          { status: TableStatus.IN_USE },
+          performedBy
+        );
+        return { success: true, data: table };
+      } catch (error) {
+        Logger.error(`IPC open-table error:`, error);
+        return { success: false, error: String(error) };
+      }
     }
-    Logger.info("Database connection closed");
-  } catch (error) {
-    Logger.error("Error during cleanup:", error);
-  }
+  );
+
+  ipcMain.handle(
+    "close-table",
+    async (event, id: number, performedBy?: number) => {
+      try {
+        Logger.info(`IPC: close-table called for table ${id}`);
+        const table = await tableService!.updateTableStatus(
+          id,
+          { status: TableStatus.AVAILABLE },
+          performedBy
+        );
+        return { success: true, data: table };
+      } catch (error) {
+        Logger.error(`IPC close-table error:`, error);
+        return { success: false, error: String(error) };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    "update-table-status",
+    async (event, id: number, data: any, performedBy?: number) => {
+      try {
+        Logger.info(`IPC: update-table-status called for table ${id}`);
+        const table = await tableService!.updateTableStatus(
+          id,
+          data,
+          performedBy
+        );
+        return { success: true, data: table };
+      } catch (error) {
+        Logger.error(`IPC update-table-status error:`, error);
+        return { success: false, error: String(error) };
+      }
+    }
+  );
+
+  Logger.info("IPC handlers initialized successfully");
 }
 
-app.on("window-all-closed", () => {
-  cleanup();
-  if (!PlatformUtils.isMac()) {
+app.whenReady().then(() => {
+  try {
+    const dbInitialized = initializeDatabase();
+    if (!dbInitialized) {
+      throw new Error("Failed to initialize database");
+    }
+
+    initializeIpcHandlers();
+    createWindow();
+
+    app.on("activate", () => {
+      if (mainWindow === null) {
+        createWindow();
+      }
+    });
+  } catch (error) {
+    Logger.error("Failed to initialize application:", error);
     app.quit();
   }
 });
 
-app.on("activate", () => {
-  if (mainWindow === null) {
-    createWindow();
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
   }
-});
-
-// Global error handlers
-process.on("uncaughtException", (error) => {
-  Logger.error("Uncaught exception:", error);
-  cleanup();
-  app.quit();
-});
-
-process.on("unhandledRejection", (error) => {
-  Logger.error("Unhandled rejection:", error);
 });
 
 app.on("quit", () => {
-  cleanup();
-  Logger.info("Application quit");
+  if (database) {
+    try {
+      database.close();
+    } catch (error) {
+      Logger.error("Error closing database on quit:", error);
+    }
+  }
 });

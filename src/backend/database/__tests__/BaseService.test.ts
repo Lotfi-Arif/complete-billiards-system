@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { BaseService } from "../BaseService";
-import Logger from "@/shared/logger";
+import Logger from "../../../shared/logger";
 
 class TestService extends BaseService {
   public exposedLogActivity(
